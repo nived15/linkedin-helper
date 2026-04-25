@@ -352,14 +352,87 @@ async def login_linkedin_secure(ctx: Context | None = None) -> dict:
 
 @mcp.tool()
 async def get_linkedin_profile(username: str, ctx: Context) -> dict:
-    """Get LinkedIn profile information"""
+    """Get LinkedIn profile information including follower count and profile views"""
     async with BrowserSession(platform='linkedin', headless=False) as session:
-        page = await session.new_page(f'https://www.linkedin.com/in/{username}')
-        
-        # Check if profile page loaded
-        if 'profile' not in page.url:
-            return {"status": "error", "message": "Profile page not found"}
+        try:
+            page = await session.new_page(f'https://www.linkedin.com/in/{username}')
             
+            # Check if we're logged in
+            if 'login' in page.url:
+                return {
+                    "status": "error",
+                    "message": "Not logged in. Please run login_linkedin tool first"
+                }
+            
+            # Check if profile page loaded
+            if '/in/' not in page.url:
+                return {"status": "error", "message": "Profile page not found"}
+            
+            ctx.info(f"Loading profile for {username}...")
+            
+            # Wait for profile to load
+            await page.wait_for_selector('.pv-top-card', timeout=10000)
+            
+            # Extract profile information
+            profile_data = await page.evaluate('''() => {
+                const getData = (selector) => {
+                    const el = document.querySelector(selector);
+                    return el ? el.innerText.trim() : null;
+                };
+                
+                // Try to get follower count from multiple possible locations
+                let followerCount = null;
+                const followerElements = document.querySelectorAll('.pv-top-card--list-bullet .t-bold, .pvs-header__optional-link span.t-bold');
+                for (const el of followerElements) {
+                    const text = el.innerText.trim().toLowerCase();
+                    if (text.includes('follower')) {
+                        const match = text.match(/([\d,]+)/);
+                        if (match) followerCount = parseInt(match[1].replace(/,/g, ''));
+                    }
+                }
+                // Also check the connections/followers section
+                if (!followerCount) {
+                    const allSpans = document.querySelectorAll('span');
+                    for (const span of allSpans) {
+                        const text = span.innerText.trim().toLowerCase();
+                        if (text.includes('follower')) {
+                            const match = text.match(/([\d,]+)/);
+                            if (match) followerCount = parseInt(match[1].replace(/,/g, ''));
+                            break;
+                        }
+                    }
+                }
+                
+                return {
+                    name: getData('.pv-top-card--list .text-heading-xlarge') || getData('h1'),
+                    headline: getData('.pv-top-card--list .text-body-medium'),
+                    location: getData('.pv-top-card--list .text-body-small:not(.inline)'),
+                    follower_count: followerCount,
+                    connection_count: (() => {
+                        const el = document.querySelector('.pv-top-card--list-bullet .t-bold');
+                        if (el) {
+                            const text = el.innerText.trim();
+                            const match = text.match(/([\d,]+)/);
+                            if (match && !text.toLowerCase().includes('follower')) return parseInt(match[1].replace(/,/g, ''));
+                        }
+                        return null;
+                    })(),
+                    about: getData('.pv-shared-text-with-see-more .inline-show-more-text'),
+                    profile_url: window.location.href
+                };
+            }''')
+            
+            await session.save_session(page)
+            
+            return {
+                "status": "success",
+                "profile": profile_data,
+                "url": f"https://www.linkedin.com/in/{username}"
+            }
+            
+        except Exception as e:
+            return {"status": "error", "message": f"Failed to get profile: {str(e)}"}
+
 @mcp.tool()
 async def browse_linkedin_feed(ctx: Context, count: int = 5) -> dict:
     """Browse LinkedIn feed and return recent posts
@@ -400,12 +473,44 @@ async def browse_linkedin_feed(ctx: Context, count: int = 5) -> dict:
                         return Array.from(document.querySelectorAll('.feed-shared-update-v2'))
                             .map(post => {
                                 try {
+                                    // Extract post URL from the activity URN or share link
+                                    let postUrl = null;
+                                    const urn = post.getAttribute('data-urn');
+                                    if (urn) {
+                                        const activityId = urn.split(':').pop();
+                                        postUrl = 'https://www.linkedin.com/feed/update/urn:li:activity:' + activityId;
+                                    }
+                                    if (!postUrl) {
+                                        const shareLink = post.querySelector('a[href*="/feed/update/"]');
+                                        if (shareLink) postUrl = shareLink.href.split('?')[0];
+                                    }
+                                    
+                                    // Extract author profile URL
+                                    const authorLink = post.querySelector('.feed-shared-actor__container-link, .update-components-actor__container-link');
+                                    const authorProfileUrl = authorLink ? authorLink.href.split('?')[0] : null;
+                                    
+                                    // Parse likes count
+                                    const likesText = post.querySelector('.social-details-social-counts__reactions-count')?.innerText?.trim() || '0';
+                                    const likesCount = parseInt(likesText.replace(/[^0-9]/g, '')) || 0;
+                                    
+                                    // Parse comments count
+                                    let commentsCount = 0;
+                                    const socialCountButtons = post.querySelectorAll('.social-details-social-counts__comments, button[aria-label*="comment"]');
+                                    for (const btn of socialCountButtons) {
+                                        const text = btn.innerText?.trim() || btn.getAttribute('aria-label') || '';
+                                        const match = text.match(/(\d+)/);
+                                        if (match) { commentsCount = parseInt(match[1]); break; }
+                                    }
+                                    
                                     return {
                                         author: post.querySelector('.feed-shared-actor__name')?.innerText?.trim() || 'Unknown',
-                                        headline: post.querySelector('.feed-shared-actor__description')?.innerText?.trim() || '',
+                                        author_headline: post.querySelector('.feed-shared-actor__description')?.innerText?.trim() || '',
+                                        author_profile_url: authorProfileUrl,
                                         content: post.querySelector('.feed-shared-text')?.innerText?.trim() || '',
                                         timestamp: post.querySelector('.feed-shared-actor__sub-description')?.innerText?.trim() || '',
-                                        likes: post.querySelector('.social-details-social-counts__reactions-count')?.innerText?.trim() || '0'
+                                        post_url: postUrl,
+                                        likes_count: likesCount,
+                                        comments_count: commentsCount
                                     };
                                 } catch (e) {
                                     return null;
@@ -595,7 +700,7 @@ async def interact_with_linkedin_post(post_url: str, ctx: Context, action: str =
             "message": "Invalid LinkedIn post URL"
         }
         
-    valid_actions = ["like", "comment", "read"]
+    valid_actions = ["like", "comment", "read", "share"]
     if action not in valid_actions:
         return {
             "status": "error",
@@ -662,6 +767,37 @@ async def interact_with_linkedin_post(post_url: str, ctx: Context, action: str =
                     "message": "Comment posted successfully"
                 }
                 
+            elif action == "share":
+                # Repost/share the post
+                try:
+                    # Click the repost button
+                    repost_button = await page.wait_for_selector(
+                        'button[aria-label*="Repost"], button[aria-label*="repost"]',
+                        timeout=5000
+                    )
+                    await repost_button.click()
+                    await page.wait_for_timeout(1000)
+                    
+                    # Click "Repost" option (instant repost without comment)
+                    repost_option = await page.wait_for_selector(
+                        'button:has-text("Repost"), div[data-artdeco-is-focused] button',
+                        timeout=5000
+                    )
+                    await repost_option.click()
+                    await page.wait_for_timeout(2000)
+                    
+                    result = {
+                        "status": "success",
+                        "action": "share",
+                        "message": "Post shared successfully"
+                    }
+                except Exception as share_error:
+                    result = {
+                        "status": "error",
+                        "action": "share",
+                        "message": f"Failed to share post: {str(share_error)}"
+                    }
+                
             else:  # action == "read"
                 result = {
                     "status": "success",
@@ -680,6 +816,135 @@ async def interact_with_linkedin_post(post_url: str, ctx: Context, action: str =
             }
         
         
+
+@mcp.tool()
+async def send_connection_request(profile_url: str, ctx: Context, note: str | None = None) -> dict:
+    """Send a connection request to a LinkedIn profile with an optional personalised note.
+    
+    Args:
+        profile_url: The LinkedIn profile URL (must contain 'linkedin.com/in/')
+        ctx: MCP context for logging and progress reporting
+        note: Optional personalised connection note (max 300 characters)
+        
+    Returns:
+        dict: Contains status, message, and request details
+    """
+    if not ('linkedin.com/in/' in profile_url):
+        return {
+            "status": "error",
+            "message": "Invalid LinkedIn profile URL. Should contain 'linkedin.com/in/'"
+        }
+    
+    if note and len(note) > 300:
+        return {
+            "status": "error",
+            "message": f"Connection note too long ({len(note)} chars). Max 300 characters."
+        }
+    
+    async with BrowserSession(platform='linkedin', headless=False) as session:
+        try:
+            page = await session.new_page(profile_url)
+            
+            # Check if we're logged in
+            if 'login' in page.url:
+                return {
+                    "status": "error",
+                    "message": "Not logged in. Please run login_linkedin tool first"
+                }
+            
+            ctx.info(f"Sending connection request to {profile_url}")
+            
+            # Wait for profile to load
+            await page.wait_for_selector('.pv-top-card', timeout=10000)
+            
+            # Look for the Connect button — it may be in the main actions or the More dropdown
+            connect_button = None
+            try:
+                connect_button = await page.wait_for_selector(
+                    'button[aria-label*="Invite"][aria-label*="connect"], button:has-text("Connect")',
+                    timeout=5000
+                )
+            except Exception:
+                # Connect might be hidden under "More" dropdown
+                try:
+                    more_button = await page.wait_for_selector(
+                        'button[aria-label="More actions"], button:has-text("More")',
+                        timeout=3000
+                    )
+                    await more_button.click()
+                    await page.wait_for_timeout(1000)
+                    connect_button = await page.wait_for_selector(
+                        'div[role="listbox"] button:has-text("Connect"), li button:has-text("Connect")',
+                        timeout=3000
+                    )
+                except Exception:
+                    pass
+            
+            if not connect_button:
+                return {
+                    "status": "error",
+                    "message": "Connect button not found. Profile may already be connected or pending."
+                }
+            
+            await connect_button.click()
+            await page.wait_for_timeout(1500)
+            
+            if note:
+                # Click "Add a note" button in the connection dialog
+                try:
+                    add_note_button = await page.wait_for_selector(
+                        'button[aria-label="Add a note"], button:has-text("Add a note")',
+                        timeout=3000
+                    )
+                    await add_note_button.click()
+                    await page.wait_for_timeout(500)
+                    
+                    # Fill in the note
+                    note_field = await page.wait_for_selector(
+                        'textarea[name="message"], textarea#custom-message',
+                        timeout=3000
+                    )
+                    await note_field.fill(note)
+                    await page.wait_for_timeout(500)
+                except Exception as note_error:
+                    ctx.info(f"Could not add note: {str(note_error)}. Sending without note.")
+            
+            # Click Send
+            try:
+                send_button = await page.wait_for_selector(
+                    'button[aria-label="Send invitation"], button[aria-label="Send now"], button:has-text("Send")',
+                    timeout=5000
+                )
+                await send_button.click()
+                await page.wait_for_timeout(2000)
+            except Exception as send_error:
+                return {
+                    "status": "error",
+                    "message": f"Failed to click Send: {str(send_error)}"
+                }
+            
+            # Extract the profile name for logging
+            profile_name = await page.evaluate('''() => {
+                const el = document.querySelector('.pv-top-card--list .text-heading-xlarge, h1');
+                return el ? el.innerText.trim() : 'Unknown';
+            }''')
+            
+            await session.save_session(page)
+            
+            return {
+                "status": "success",
+                "message": f"Connection request sent to {profile_name}",
+                "profile_url": profile_url,
+                "profile_name": profile_name,
+                "note_included": note is not None
+            }
+            
+        except Exception as e:
+            return {
+                "status": "error",
+                "message": f"Failed to send connection request: {str(e)}"
+            }
+
 
 if __name__ == "__main__":
     try:
