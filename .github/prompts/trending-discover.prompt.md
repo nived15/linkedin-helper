@@ -15,7 +15,7 @@ Run Phase 1 of the trending workflow:
    - Adjust or add queries until you have at least 20 unique posts.
 3. Prefer posts with engagement (likes or comments > 0). Skip purely promotional or job-posting content.
 4. For each selected post, draft a comment following `trending-workflow` skill's `assets/comment-template.md` (Acknowledge → Insight → Question, max 3 sentences).
-5. Save all results to `data/trending_queue.json` with status `staged`.
-6. Tell Nived: "X posts staged. Review `data/trending_queue.json` and set status to `approved` for posts you want to engage with."
+5. Save all results to `data/trending_queue.md` using the markdown checkbox format (see `data-files.instructions.md`).
+6. Tell Nived: "X posts staged. Review `data/trending_queue.md` and tick the checkboxes for posts you want to engage with."
 
 Do NOT engage (like/comment) on any posts in this step. That happens in `/trending-engage`.

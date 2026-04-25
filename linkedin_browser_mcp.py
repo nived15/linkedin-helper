@@ -167,141 +167,119 @@ async def load_cookies(context, platform):
         return False
     
 class BrowserSession:
-    """Context manager for browser sessions with cookie persistence"""
-    
-    def __init__(self, platform='linkedin', headless=False, launch_timeout=30000, max_retries=3):
-        logger.info(f"Initializing {platform} browser session (headless: {headless})")
-        self.platform = platform
-        self.headless = headless
-        self.launch_timeout = launch_timeout
-        self.max_retries = max_retries
-        self.playwright = None
-        self.browser = None
-        self.context = None
-        self._closed = False
-        
-    async def __aenter__(self):
-        retry_count = 0
-        last_error = None
-        
-        # Ensure sessions directory exists with proper permissions
-        if not setup_sessions_directory():
-            raise Exception("Failed to set up sessions directory with proper permissions")
-        
-        while retry_count < self.max_retries and not self._closed:
-            try:
-                logger.info(f"Starting Playwright (attempt {retry_count + 1}/{self.max_retries})")
-                
-                # Ensure clean state
-                await self._cleanup()
-                
-                # Initialize Playwright with timeout
-                self.playwright = await asyncio.wait_for(
-                    async_playwright().start(),
-                    timeout=self.launch_timeout/1000
-                )
-                
-                # Launch browser with more generous timeout and retry logic
-                launch_success = False
-                for attempt in range(3):
-                    try:
-                        logger.info(f"Launching browser (sub-attempt {attempt + 1}/3)")
-                        self.browser = await self.playwright.chromium.launch(
-                            headless=self.headless,
-                            timeout=self.launch_timeout,
-                            args=[
-                                '--disable-dev-shm-usage',
-                                '--no-sandbox',
-                                '--disable-blink-features=AutomationControlled',  # Try to avoid detection
-                                '--start-maximized'  # Start with maximized window
-                            ]
-                        )
-                        launch_success = True
-                        break
-                    except Exception as e:
-                        logger.error(f"Browser launch sub-attempt {attempt + 1} failed: {str(e)}")
-                        await asyncio.sleep(2)  # Increased delay between attempts
-                
-                if not launch_success:
-                    raise Exception("Failed to launch browser after 3 attempts")
-                
-                logger.info("Creating browser context")
-                self.context = await self.browser.new_context(
-                    viewport={'width': 1280, 'height': 800},
-                    user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.110 Safari/537.36'
-                )
-                
-                # Try to load existing session
-                logger.info("Attempting to load existing session")
-                try:
-                    session_loaded = await load_cookies(self.context, self.platform)
-                    if session_loaded:
-                        logger.info("Existing session loaded successfully")
-                    else:
-                        logger.info("No existing session found or session expired")
-                except Exception as cookie_error:
-                    logger.warning(f"Error loading cookies: {str(cookie_error)}")
-                    # Continue even if cookie loading fails
-                
-                return self
-                
-            except Exception as e:
-                last_error = e
-                retry_count += 1
-                logger.error(f"Browser session initialization attempt {retry_count} failed: {str(e)}")
-                
-                # Cleanup on failure
-                await self._cleanup()
-                
-                if retry_count < self.max_retries and not self._closed:
-                    await asyncio.sleep(2 * retry_count)  # Exponential backoff
-                else:
-                    logger.error("All browser session initialization attempts failed")
-                    raise Exception(f"Failed to initialize browser after {self.max_retries} attempts. Last error: {str(last_error)}")
+    """Persistent browser session — one visible Chromium window shared across all tool calls.
 
-    async def _cleanup(self):
-        """Clean up browser resources"""
-        if self.browser:
-            try:
-                await self.browser.close()
-            except Exception as e:
-                logger.error(f"Error closing browser: {str(e)}")
-        if self.playwright:
-            try:
-                await self.playwright.stop()
-            except Exception as e:
-                logger.error(f"Error stopping playwright: {str(e)}")
-        self.browser = None
-        self.playwright = None
-        self.context = None
+    Usage stays the same: ``async with BrowserSession() as session:``
+    First call launches Chromium (always visible). Subsequent calls reuse the
+    same browser, context and page. ``__aexit__`` is a no-op so the browser
+    stays open between tool calls. Call the ``close_browser`` MCP tool to shut
+    it down when the workflow is done.
+    """
+
+    _playwright = None
+    _browser = None
+    _context = None
+    _page = None
+
+    def __init__(self, platform='linkedin', headless=False, **_kwargs):
+        self.platform = platform
+
+    # -- context-manager interface (keeps existing tool code unchanged) -------
+
+    async def __aenter__(self):
+        if (
+            BrowserSession._browser is None
+            or not BrowserSession._browser.is_connected()
+        ):
+            await self._launch()
+        return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
-        logger.info("Closing browser session")
-        self._closed = True
-        await self._cleanup()
-        
+        # Intentionally empty — browser stays open for the next tool call.
+        pass
+
+    # -- public helpers used by tools ----------------------------------------
+
     async def new_page(self, url=None):
-        if self._closed:
-            raise Exception("Browser session has been closed")
-        
-        page = await self.context.new_page()
+        """Return the shared page, optionally navigating to *url*."""
+        if BrowserSession._page is None or BrowserSession._page.is_closed():
+            BrowserSession._page = await BrowserSession._context.new_page()
         if url:
-            try:
-                await page.goto(url, wait_until='domcontentloaded', timeout=30000)
-            except Exception as e:
-                logger.error(f"Error navigating to {url}: {str(e)}")
-                raise
-        return page
-        
+            await BrowserSession._page.goto(
+                url, wait_until='domcontentloaded', timeout=30000,
+            )
+        return BrowserSession._page
+
     async def save_session(self, page):
-        if self._closed:
-            raise Exception("Browser session has been closed")
-            
+        """Persist cookies to disk."""
         try:
             await save_cookies(page, self.platform)
         except Exception as e:
-            logger.error(f"Error saving session: {str(e)}")
-            raise
+            logger.error(f"Error saving session: {e}")
+
+    # -- internals -----------------------------------------------------------
+
+    async def _launch(self):
+        if not setup_sessions_directory():
+            raise Exception("Failed to set up sessions directory")
+
+        logger.info("Launching persistent Chromium (visible)")
+        BrowserSession._playwright = await asyncio.wait_for(
+            async_playwright().start(), timeout=30,
+        )
+        BrowserSession._browser = await BrowserSession._playwright.chromium.launch(
+            headless=False,
+            timeout=30000,
+            args=[
+                '--disable-dev-shm-usage',
+                '--no-sandbox',
+                '--disable-blink-features=AutomationControlled',
+                '--start-maximized',
+            ],
+        )
+        BrowserSession._context = await BrowserSession._browser.new_context(
+            viewport={'width': 1280, 'height': 800},
+            user_agent=(
+                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+                'AppleWebKit/537.36 (KHTML, like Gecko) '
+                'Chrome/96.0.4664.110 Safari/537.36'
+            ),
+        )
+        # Load saved cookies
+        try:
+            loaded = await load_cookies(BrowserSession._context, self.platform)
+            logger.info("Session cookies loaded" if loaded else "No saved session")
+        except Exception as e:
+            logger.warning(f"Cookie load error: {e}")
+
+        BrowserSession._page = await BrowserSession._context.new_page()
+
+    @classmethod
+    async def shutdown(cls):
+        """Close the browser and release all resources."""
+        if cls._browser:
+            try:
+                await cls._browser.close()
+            except Exception:
+                pass
+        if cls._playwright:
+            try:
+                await cls._playwright.stop()
+            except Exception:
+                pass
+        cls._browser = None
+        cls._playwright = None
+        cls._context = None
+        cls._page = None
+        logger.info("Browser session closed")
+
+
+@mcp.tool()
+async def close_browser(ctx: Context) -> dict:
+    """Close the persistent browser session when the workflow is finished."""
+    await BrowserSession.shutdown()
+    return {"status": "success", "message": "Browser closed"}
+
 
 @mcp.tool()
 async def login_linkedin(username: str | None = None, password: str | None = None, ctx: Context | None = None) -> dict:
@@ -1122,13 +1100,43 @@ async def search_linkedin_posts(query: str, ctx: Context, count: int = 10) -> di
                     }
 
                     let postUrl = '';
+                    // 1. Direct feed/update link
                     const feedLink = container.querySelector('a[href*="feed/update/urn:li:"]');
                     if (feedLink) {
                         postUrl = feedLink.href.split('?')[0];
-                    } else {
-                        const profileLink = container.querySelector('a[href*="linkedin.com/in/"]');
-                        if (profileLink) postUrl = profileLink.href.split('?')[0];
                     }
+                    // 2. data-urn on the container or a parent/child
+                    if (!postUrl) {
+                        let urnEl = container.closest('[data-urn*="urn:li:activity"]')
+                                 || container.querySelector('[data-urn*="urn:li:activity"]');
+                        if (!urnEl) {
+                            // walk up a few levels
+                            let p = container;
+                            for (let i = 0; i < 5 && p; i++) {
+                                const urn = p.getAttribute && p.getAttribute('data-urn');
+                                if (urn && urn.includes('urn:li:activity')) { urnEl = p; break; }
+                                p = p.parentElement;
+                            }
+                        }
+                        if (urnEl) {
+                            const urn = urnEl.getAttribute('data-urn');
+                            postUrl = 'https://www.linkedin.com/feed/update/' + urn;
+                        }
+                    }
+                    // 3. /posts/ style permalink
+                    if (!postUrl) {
+                        const postsLink = container.querySelector('a[href*="/posts/"]');
+                        if (postsLink) postUrl = postsLink.href.split('?')[0];
+                    }
+                    // 4. Embedded activity URN anywhere in container HTML
+                    if (!postUrl) {
+                        const html = container.innerHTML || '';
+                        const urnMatch = html.match(/urn:li:activity:(\\d+)/);
+                        if (urnMatch) {
+                            postUrl = 'https://www.linkedin.com/feed/update/urn:li:activity:' + urnMatch[1];
+                        }
+                    }
+                    // Do NOT fall back to profile URL — skip posts without a real post link
 
                     const timeMatch = containerText.match(/\\b(\\d+[smh]\\b|\\d+[dw]\\b|\\d+ (min|hour|day|week|month)s? ago|just now)/i);
                     const timestamp = timeMatch ? timeMatch[0] : '';
@@ -1156,7 +1164,7 @@ async def search_linkedin_posts(query: str, ctx: Context, count: int = 10) -> di
                         }
                     }
 
-                    if (content.length > 20) {
+                    if (content.length > 20 && postUrl && (postUrl.includes('/feed/update/') || postUrl.includes('/posts/'))) {
                         results.push({ postUrl, author, content, timestamp, likes, comments, dedupeKey });
                     }
                 }
