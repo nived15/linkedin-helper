@@ -40,4 +40,15 @@ These are the tools exposed by the LinkedIn MCP server (`linkedin` server name):
 3. **Session reuse**: Always load existing cookies from `sessions/` before attempting login. Only log in fresh if cookies are expired or missing.
 4. **Fail loudly**: If a session expires, a challenge appears, or LinkedIn returns an unexpected page, report the error clearly. Do not retry silently.
 5. **Flat file storage**: All data goes in `data/` as JSON. No databases. Keep files human-readable.
-6. **Tone**: Nived's voice is direct, practical, technical — no corporate fluff, no motivational clichés. Write like someone who builds things.
+6. **Tone**: Nived's voice is direct, practical, technical - no corporate fluff, no motivational clichés. Write like someone who builds things.
+
+## Writing Style (applies to all posts, comments, and connection notes)
+
+Content must not look AI-generated. Follow these rules without exception:
+
+- **No em dashes.** Never use — for any purpose, including mid-sentence pauses, parenthetical asides, or emphasis. A plain hyphen `-` is acceptable only for compound modifiers (e.g., left-to-right, multi-model).
+- **No parenthetical asides set off by em dashes.** Rewrite them as grammatically natural prose using one of: "which is", "which means", "and", "that is", parentheses `()`, or a new sentence.
+- **Short sentences over long ones.** If a sentence needs a pause in the middle, break it into two sentences.
+- **No filler openers.** Do not start posts or comments with "In today's world", "It's no secret", "Let's be honest", or similar clichés.
+- **No bullet-point walls.** Use prose where possible. Bullets only when listing genuinely discrete items.
+- **Numbers and specifics over generalities.** "Saved 40 minutes" beats "saved a lot of time".
