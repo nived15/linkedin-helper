@@ -12,12 +12,30 @@ description: "Discover trending AI/dev posts and execute staged engagement. Use 
 
 ## Phase 1 — Discover
 
-1. Call MCP `search_linkedin_posts` (not `browse_linkedin_feed`) with targeted keywords:
-   - `"GitHub Copilot AI developer tools"`
-   - `"Claude AI LLM agents software engineering"`
-   - `"AI developer productivity MCP model context protocol"`
-   - Run more queries if needed to reach 20 unique posts.
-2. Prefer posts that have actual engagement counts (likes or comments > 0). Skip job postings and purely promotional content.
+### How to design queries
+
+LinkedIn content search is not Google. Long keyword-stuffed queries act as AND filters and shrink the result set. Short, specific queries that match the exact language people use in posts work far better.
+
+Rules:
+- Keep queries to 2-4 words
+- Use exact product names or feature names people actually type in posts (`GitHub Copilot`, `Copilot agent mode`, not `GitHub Copilot AI coding productivity tool`)
+- Mix query types: broad (product name) + specific feature + debate/comparison + audience angle
+- One query per topic, no redundancy
+
+Example query set for **GitHub Copilot**:
+  - `"GitHub Copilot"` — catches all Copilot discussion, broad
+  - `"Copilot agent mode"` — hot 2026 feature
+  - `"GitHub Copilot Cursor"` — comparison/debate posts (highest engagement)
+  - `"Copilot enterprise"` — enterprise angle, matches Nived's SE@Microsoft role
+
+Example query set for **AI agents / MCP**:
+  - `"MCP server"` — short, matches actual post language
+  - `"model context protocol"` — catches explainers and opinion posts
+  - `"AI agent workflow"` — practical posts on agentic dev
+  - `"Claude Code"` — Claude's coding agent, often discussed alongside MCP
+
+1. Call MCP `search_linkedin_posts` with `sort_by="relevance"` (default). Run **exactly 4 queries**, one at a time. Stop at 4 regardless of result count — more queries waste tokens and hit LinkedIn rate limits.
+2. Prefer posts that have actual engagement counts (likes or comments > 0). Skip job postings, certification announcements, and purely promotional content.
 3. For each post, draft a comment following the tone guide in [comment-template.md](./assets/comment-template.md).
 4. Write all results to **`data/trending_queue.md`**. Each entry in the markdown has:
    - A checkbox `- [ ] Approve for engagement` (Nived ticks to approve)

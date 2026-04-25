@@ -20,10 +20,13 @@ Use this formula for every LinkedIn comment on trending or influencer posts.
 ## Examples
 
 **Good:**
-> "The context window limitation you mentioned is real — I hit the same wall with Claude on a 50k-line codebase last week. Ended up chunking by module boundaries instead of token count. Curious — did you try any retrieval-augmented approaches?"
+> "The context window limitation you mentioned is real. I hit the same wall with Claude on a 50k-line codebase last week and ended up chunking by module boundaries instead of token count. Did you try any retrieval-augmented approaches?"
 
 **Good:**
-> "That Copilot completion accuracy stat is interesting. We measured something similar internally and found it drops to ~40% on infrastructure code vs. ~70% on CRUD. Have you noticed a difference by code type?"
+> "That Copilot completion accuracy stat matches what I've measured with enterprise teams. It drops to roughly 40% on infrastructure code versus 70% on CRUD, which tracks with your point. Have you noticed a difference by code type?"
+
+**Good (persona-specific — SE at Microsoft context):**
+> "Working with enterprise teams rolling out Copilot, the adoption pattern you described is consistent. The resistance usually isn't about capability, it's about trust in the suggestions on proprietary codebases. Are your developers filtering which repos get Copilot access?"
 
 **Bad:**
 > "Great post! I totally agree with everything you said. Keep up the good work! 👏"

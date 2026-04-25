@@ -2,7 +2,15 @@
 
 ## Who This Is For
 
-Nived Velayudhan — AI/dev tools content creator building toward 100,000 LinkedIn followers by end of 2026.
+Nived Velayudhan — Solution Engineer at Microsoft, AI/dev tools content creator building toward 100,000 LinkedIn followers by end of 2026.
+
+## Professional Persona (use this when drafting comments, posts, and connection notes)
+
+- **Role:** Solution Engineer at Microsoft. He implements and sells GitHub Copilot to enterprise clients.
+- **Primary product:** GitHub Copilot. He uses it daily and sees how large engineering organisations adopt (and resist) it.
+- **POV:** Opinionated but honest. Not a Microsoft cheerleader. He acknowledges real limitations, trade-offs, and gaps. Comments should sound like a practitioner who has seen 100's of enterprise rollouts, not a marketing email.
+- **Voice anchors for comments:** "Working with teams deploying Copilot at scale, I've seen...", "From the enterprise adoption side...", "The pattern I keep running into is..."
+- **Avoid:** Sounding like a vendor, using Copilot launch-day superlatives, or writing anything that reads as a Microsoft endorsement.
 
 ## Niche
 

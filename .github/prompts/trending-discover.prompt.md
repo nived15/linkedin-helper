@@ -9,34 +9,46 @@ Run Phase 1 of the trending workflow. Follow these steps exactly — no extra qu
 ## Step 1 — Ensure session is active
 Call `login_linkedin_secure`. If it fails, stop and report the error.
 
-## Step 2 — Search for posts (exactly 4 queries, no more)
+## Step 2 — Derive queries from the topic argument, then search
 
-Call `search_linkedin_posts` with `sort_by="relevance"` (the default) for each query below. Run them **one at a time** (not in parallel — LinkedIn rate-limits concurrent browser tabs). Each call returns up to 10 posts sorted by LinkedIn's relevance algorithm, which surfaces higher-engagement content first.
+### How LinkedIn search works
+LinkedIn content search ranks by relevance when no `sortBy` param is given. Relevance = keyword match + engagement signal. **Short exact-phrase queries outperform long keyword phrases** because long queries act as AND filters, shrinking the pool and hiding high-engagement posts that don't happen to use every keyword.
 
-Required queries, in order:
-1. `"GitHub Copilot AI developer tools"`
-2. `"Claude AI LLM agents software engineering"`
-3. `"AI developer productivity MCP model context protocol"`
-4. `"software engineering best practices AI"`
+Rule: 2-4 words per query. Match exact language people use in posts, not your own keyword strategy.
 
-**Stop after 4 queries regardless of how many posts you have.** Do not add extra queries to reach 20 — the 4 queries above yield enough candidates. Running more queries burns tokens and hits LinkedIn rate limits.
+### Query derivation
+Based on the topic argument passed to this prompt, derive exactly 4 queries using this pattern:
+- **Query 1:** Exact product/technology name (broad catch-all)
+- **Query 2:** Specific feature or announcement being discussed right now
+- **Query 3:** Comparison or debate framing (e.g., "Product vs Competitor") — these always get the highest engagement
+- **Query 4:** Audience-specific angle that matches Nived's role as a Solution Engineer at Microsoft
+
+**For this run — topic: GitHub Copilot:**
+1. `"GitHub Copilot"` — exact product name, catches all Copilot discussion
+2. `"Copilot agent mode"` — the main 2026 feature being actively debated
+3. `"GitHub Copilot Cursor"` — comparison posts between Copilot and Cursor always have high engagement
+4. `"Copilot enterprise"` — enterprise adoption angle, matches Nived's SE@Microsoft POV
+
+Call `search_linkedin_posts` for each, one at a time (not in parallel). **Stop after all 4 regardless of result count.** Do not invent additional queries.
 
 ## Step 3 — Filter and rank posts
 
 From all posts returned across the 4 queries:
 - Deduplicate by `post_url`.
-- **Prefer posts where `likes` or `comments` fields are non-empty** (these are the high-engagement ones the relevance sort surfaced).
-- Skip posts that are: purely promotional, job postings, certification announcements, or event invites.
-- Select the best 20 (or fewer if fewer pass the filter). Rank engagement signals: posts with both likes and comments > posts with only one signal > posts with no engagement data.
+- **Prefer posts where `likes` or `comments` fields are non-empty** (relevance sort surfaces these first).
+- Skip: purely promotional, job postings, certification badge announcements, event invites.
+- Select best 20 (or fewer). Priority order: posts with both likes + comments > posts with one signal > posts with no engagement data.
 
-## Step 4 — Draft comments
+## Step 4 — Draft comments using Nived's persona
 
-For each selected post, draft a comment using the Acknowledge → Insight → Question formula from `assets/comment-template.md`:
+Nived is a Solution Engineer at Microsoft who implements GitHub Copilot with enterprise clients. Comments must reflect this — speak as a practitioner who has seen Copilot adoption at scale, not as a generic developer or a Microsoft marketer.
+
+For each selected post, draft a comment using the Acknowledge → Insight → Question formula:
 - Max 3 sentences.
-- Reference something specific from the post snippet.
-- Add a concrete insight from real experience (name a tool, a number, a real outcome).
-- End with a focused question that invites a reply.
-- No em dashes. No "Great post!" openers. No emojis unless the original post uses them heavily.
+- **Acknowledge:** Reference a specific point from the post, not the overall topic.
+- **Insight:** Add something from Nived's actual context. Examples: enterprise adoption patterns, things he's measured, specific gaps he's seen in real Copilot rollouts, comparisons to other tools he uses.
+- **Question:** End with a focused, specific question that invites the author to respond.
+- No em dashes. No "Great post!" openers. No emojis unless the original post has them throughout.
 
 ## Step 5 — Write to data/trending_queue.md
 
