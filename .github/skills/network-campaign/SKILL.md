@@ -12,7 +12,7 @@ description: "Search for target profiles, generate personalised connection notes
 
 ## Procedure
 
-1. Read `data/network_growth.json` and count requests sent in the current week (Monday–Sunday).
+1. Read `data/network_growth.md` and count requests sent in the current week (Monday–Sunday).
    - If 100 or more sent this week, **stop** and tell Nived: "Weekly cap reached (100 requests). Try again next week."
 2. Calculate remaining budget: `100 - requests_sent_this_week`.
 3. Call MCP `search_linkedin_profiles` with niche keywords:
@@ -21,13 +21,13 @@ description: "Search for target profiles, generate personalised connection notes
 4. Filter results:
    - Prefer 2nd-degree connections
    - Prefer profiles with 500+ followers
-   - Exclude anyone already in `data/network_growth.json` history
+   - Exclude anyone already in `data/network_growth.md`
 5. For each candidate (max 20 per run), use MCP `view_linkedin_profile` to get profile details, then generate a personalised connection note using the formula in [note-template.md](./assets/note-template.md).
 6. Display the full batch to Nived:
    - Name, headline, profile URL, and the personalised note for each
    - Ask to confirm, edit notes, or remove candidates
 7. **Only after explicit approval**, send each request:
-   - Log to `data/network_growth.json` with `status: pending`, `sent_at` timestamp, and the note text
+   - Append to `data/network_growth.md` with the person's name, profile URL, note sent, sent-at timestamp, and status `pending`
 8. Summarise: "Sent X connection requests. Y remaining this week."
 
 ## Error Handling

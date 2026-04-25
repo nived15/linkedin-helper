@@ -19,27 +19,26 @@ description: "Discover trending AI/dev posts and execute staged engagement. Use 
    - Run more queries if needed to reach 20 unique posts.
 2. Prefer posts that have actual engagement counts (likes or comments > 0). Skip job postings and purely promotional content.
 3. For each post, draft a comment following the tone guide in [comment-template.md](./assets/comment-template.md).
-4. Write all results to `data/trending_queue.json` with:
-   - `status`: `staged`
-   - `discovered_at`: current ISO 8601 timestamp
-   - `drafted_comment`: the AI-generated comment
-5. Tell Nived: "X posts staged. Review `data/trending_queue.json` and set status to `approved` for posts you want to engage with."
+4. Write all results to **`data/trending_queue.md`**. Each entry in the markdown has:
+   - A checkbox `- [ ] Approve for engagement` (Nived ticks to approve)
+   - Author, URL, snippet, and drafted comment
+5. Tell Nived: "X posts staged. Review `data/trending_queue.md`, tick the checkboxes for posts you want to engage with, then tell me to run Phase 2."
 6. **Stop here. Do not engage yet.**
 
 ## Phase 2 — Engage
 
 Only run this after Nived has reviewed the queue.
 
-1. Read `data/trending_queue.json` and collect entries with status `approved`.
-2. If none are approved, tell Nived to review first and stop.
+1. Read `data/trending_queue.md` and collect entries where the checkbox is **ticked** (`- [x] Approve for engagement`).
+2. If no checkboxes are ticked, tell Nived to review `data/trending_queue.md` first and stop.
 3. Like each approved post:
    - Call MCP `interact_with_linkedin_post` with action `like`
    - Wait `random.uniform(15, 45)` seconds between likes
 4. Post all approved comments in one batch:
-   - Call MCP `comment_on_approved_posts` (reads `data/trending_queue.json` automatically)
-5. Update each entry:
-   - Set `status` to `engaged`
-   - Set `engaged_at` to current ISO 8601 timestamp
+   - Call MCP `comment_on_approved_posts` with the list of `{post_url, comment}` pairs parsed from `data/trending_queue.md`
+5. Update `data/trending_queue.md` for each engaged entry:
+   - Change `- [x] Approve for engagement` to `- [x] ~~Engaged~~`
+   - Add `**Engaged at:** <timestamp>` below the checkbox
 6. Summarise: "Engaged with X posts — Y liked, Z commented."
 
 ## Error Handling

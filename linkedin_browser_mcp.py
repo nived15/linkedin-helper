@@ -72,6 +72,34 @@ def handle_notification(ctx, notification_type, params=None):
     except Exception as e:
         logger.error(f"Error handling notification: {str(e)}")
 
+def get_or_create_encryption_key() -> bytes:
+    """Return the encryption key, generating and persisting one to .env if missing."""
+    key = os.getenv('COOKIE_ENCRYPTION_KEY', '').strip()
+    if key:
+        return key.encode() if isinstance(key, str) else key
+    # Generate a new key and write it back to .env so it persists across runs
+    new_key = Fernet.generate_key()
+    env_path = Path(__file__).parent / '.env'
+    try:
+        existing = env_path.read_text(encoding='utf-8') if env_path.exists() else ''
+        if 'COOKIE_ENCRYPTION_KEY=' in existing:
+            lines = []
+            for line in existing.splitlines():
+                if line.startswith('COOKIE_ENCRYPTION_KEY='):
+                    lines.append(f'COOKIE_ENCRYPTION_KEY={new_key.decode()}')
+                else:
+                    lines.append(line)
+            env_path.write_text('\n'.join(lines) + '\n', encoding='utf-8')
+        else:
+            with open(env_path, 'a', encoding='utf-8') as f:
+                f.write(f'\nCOOKIE_ENCRYPTION_KEY={new_key.decode()}\n')
+        os.environ['COOKIE_ENCRYPTION_KEY'] = new_key.decode()
+        logger.info('Generated and saved new COOKIE_ENCRYPTION_KEY to .env')
+    except Exception as e:
+        logger.warning(f'Could not persist COOKIE_ENCRYPTION_KEY to .env: {e}')
+    return new_key
+
+
 # Helper to save cookies between sessions
 async def save_cookies(page, platform):
     """Save cookies with proper directory permissions"""
@@ -93,7 +121,7 @@ async def save_cookies(page, platform):
             raise Exception("Failed to set up sessions directory")
         
         # Encrypt cookies before saving
-        key = os.getenv('COOKIE_ENCRYPTION_KEY', Fernet.generate_key())
+        key = get_or_create_encryption_key()
         f = Fernet(key)
         encrypted_data = f.encrypt(json.dumps(cookie_data).encode())
         
@@ -113,7 +141,7 @@ async def load_cookies(context, platform):
             encrypted_data = f.read()
             
         # Decrypt cookies
-        key = os.getenv('COOKIE_ENCRYPTION_KEY')
+        key = get_or_create_encryption_key()
         if not key:
             return False
             

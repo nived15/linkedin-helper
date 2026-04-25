@@ -1,99 +1,100 @@
 ---
-description: "Use when reading, writing, or validating JSON data files under data/. Covers schema conventions for content_queue, trending_queue, top_voices, network_growth, and analytics files."
+description: "Use when reading, writing, or validating data files under data/. Covers format conventions for content_queue, trending_queue, top_voices, network_growth, and analytics files."
 applyTo: "data/**"
 ---
 
-# Data File Schema Conventions
+# Data File Conventions
 
-All agent state lives in `data/` as JSON files. Every file must be human-readable and directly editable by Nived.
+All data lives in `data/` as **Markdown files** (`.md`). There are no JSON data files — markdown is the single source of truth.
 
-## `data/content_queue.json`
+## Approval Workflow
 
-Array of post entries. Each entry:
+Nived ticks checkboxes (`- [ ]` → `- [x]`) directly in the markdown file, then tells the agent to execute. The agent reads the markdown, finds checked items, and acts on them.
 
-```json
-{
-  "id": "uuid",
-  "topic": "Short topic description",
-  "body": "Full post text",
-  "hashtags": ["#AI", "#GitHubCopilot"],
-  "scheduled_time": "2026-04-28T09:00:00Z",
-  "status": "draft | approved | posted | skipped",
-  "created_at": "2026-04-25T14:00:00Z",
-  "posted_at": null
-}
+## `data/trending_queue.md`
+
+Each discovered post is an entry:
+
+```markdown
+## tq-NNN · Author Name
+
+- [ ] Approve for engagement
+- **URL:** <https://www.linkedin.com/in/username/>
+- **Snippet:** First 200 chars of the post
+- **Drafted Comment:**
+  > Your drafted comment here
+
+---
 ```
 
-## `data/trending_queue.json`
+**States:**
+- `- [ ] Approve for engagement` — not yet approved
+- `- [x] Approve for engagement` — approved, ready for Phase 2
+- `- [x] ~~Engaged~~` + `**Engaged at:** <timestamp>` — done
 
-Array of trending post entries. Each entry:
+## `data/content_queue.md`
 
-```json
-{
-  "id": "uuid",
-  "post_url": "https://www.linkedin.com/feed/update/...",
-  "author": "Author Name",
-  "snippet": "First 200 chars of the post",
-  "engagement": {"likes": 150, "comments": 42},
-  "drafted_comment": "AI-generated comment text",
-  "status": "staged | approved | engaged | skipped",
-  "discovered_at": "2026-04-25T14:00:00Z",
-  "engaged_at": null
-}
+Each draft post is an entry:
+
+```markdown
+## Post: Short topic title
+
+- [ ] Approved to post
+- **Scheduled:** 2026-04-28 09:00 UTC
+
+Full post body here, formatted as it will appear on LinkedIn.
+
+#Hashtag1 #Hashtag2
+
+---
 ```
 
-## `data/top_voices.json`
+**States:**
+- `- [ ] Approved to post` — draft, not yet approved
+- `- [x] Approved to post` — approved, ready to publish
+- `- [x] Posted` + `**Posted at:** <timestamp>` — published
 
-Array of tracked influencer profiles:
+## `data/network_growth.md`
 
-```json
-{
-  "name": "Person Name",
-  "profile_url": "https://www.linkedin.com/in/username",
-  "niche_tags": ["AI", "LLMs", "developer tools"],
-  "last_checked": "2026-04-25T14:00:00Z"
-}
+Header section shows weekly cap and count. Each connection request is an entry:
+
+```markdown
+# Network Growth
+
+Weekly cap: 100 | Sent this week: N
+
+---
+
+## [Person Name](<https://www.linkedin.com/in/username/>)
+
+- **Headline:** Their job title
+- **Note sent:** Personalised note text
+- **Sent at:** 2026-04-25 14:00 UTC
+- **Status:** pending | accepted | ignored
+
+---
 ```
 
-## `data/network_growth.json`
+## `data/top_voices.md`
 
-Object with weekly tracking:
+Each tracked influencer is a section:
 
-```json
-{
-  "weekly_cap": 100,
-  "requests": [
-    {
-      "profile_url": "https://www.linkedin.com/in/username",
-      "name": "Person Name",
-      "note_sent": "Personalised connection note text",
-      "sent_at": "2026-04-25T14:00:00Z",
-      "status": "pending | accepted | ignored"
-    }
-  ]
-}
+```markdown
+## [Person Name](<https://www.linkedin.com/in/username/>)
+
+- **Niche tags:** AI, LLMs, developer tools
+- **Last checked:** 2026-04-25 14:00 UTC
+
+---
 ```
 
-## `data/analytics/YYYY-MM-DD.json`
+## `data/analytics/YYYY-MM-DD-summary.md`
 
-Weekly raw data snapshot:
-
-```json
-{
-  "report_date": "2026-04-25",
-  "followers": {"current": 5200, "previous": 5050, "delta": 150},
-  "profile_views": 320,
-  "post_impressions": 12500,
-  "posts_published": 4,
-  "top_post": {"topic": "...", "impressions": 4200, "likes": 85, "comments": 23},
-  "connections": {"sent": 18, "accepted": 12, "rate": 0.67},
-  "recommended_focus": "Double down on AI agent content — highest engagement this week"
-}
-```
+Human-readable weekly growth report. See the growth-report skill for the template.
 
 ## Rules
 
-- Always use ISO 8601 timestamps with timezone (`Z` for UTC).
-- Use `null` for empty optional fields, never omit the key.
-- Status fields are lowercase strings — valid values are documented per schema above.
-- When updating a file, read it first, modify the relevant entry, then write back. Never overwrite the entire file.
+- Always use ISO 8601 timestamps in a readable format: `2026-04-25 14:00 UTC`.
+- When updating a file, read it first, find the relevant entry, modify it in-place. Never overwrite the entire file.
+- Wrap all URLs in angle brackets `<url>` to avoid bare URL lint errors.
+- Use `---` as a horizontal rule separator between entries.

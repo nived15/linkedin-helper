@@ -16,8 +16,8 @@ description: "Generate a weekly LinkedIn growth report with follower stats, post
    - Current follower count
    - Profile view count (if available)
 2. **Load previous report**: Read the most recent `data/analytics/YYYY-MM-DD.json` file to compute week-over-week deltas. If no previous report exists, treat all values as baseline.
-3. **Post performance**: Read `data/content_queue.json` and filter entries with `status: posted` and `posted_at` within the last 7 days. For each, note the topic and any available engagement numbers.
-4. **Network growth**: Read `data/network_growth.json` and compute:
+3. **Post performance**: Read `data/content_queue.md` and find posted entries (marked with ~~strikethrough~~ or a `Posted` status line) within the last 7 days. For each, note the topic and any available engagement numbers.
+4. **Network growth**: Read `data/network_growth.md` and compute:
    - Requests sent this week
    - Requests accepted (status changed to `accepted`)
    - Acceptance rate: `accepted / sent`

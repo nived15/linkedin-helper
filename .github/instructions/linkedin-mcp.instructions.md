@@ -32,9 +32,9 @@ applyTo: "**/*.py"
 
 ## Data Files
 
-- All tool results that produce state (posts queued, comments staged, connections sent) must be written to the appropriate `data/*.json` file.
-- Use `json.dumps(data, indent=2)` for readability.
+- All tool results that produce state (posts queued, comments staged, connections sent) must be written to the appropriate `data/*.md` file in markdown format.
 - Always read the existing file first, append/update, then write back — never overwrite the entire file blindly.
+- Use checkbox format (`- [ ]` / `- [x]`) for approval states. Add `**Posted at:**`, `**Sent at:**`, and `**Engaged at:**` timestamps inline after completing actions.
 
 ## MCP Tool Structure
 

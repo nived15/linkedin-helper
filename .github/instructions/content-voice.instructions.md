@@ -1,5 +1,5 @@
 ---
-applyTo: "data/content_queue.json,data/trending_queue.json,data/top_voices.json,data/network_growth.json"
+applyTo: "data/content_queue.md,data/trending_queue.md,data/top_voices.md,data/network_growth.md"
 ---
 
 # Content Voice and Style Rules
