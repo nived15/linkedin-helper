@@ -1113,13 +1113,23 @@ async def search_linkedin_posts(query: str, ctx: Context, count: int = 10) -> di
                         .filter(l => !l.match(/^(Feed post|Like|Comment|Repost|Send|View my services|\\d+$)/i));
                     const content = contentLines.join(' ').slice(0, 600);
 
-                    const reactionsEl = container.querySelector('[aria-label*="reaction"], [aria-label*="like"]');
-                    const likes = reactionsEl
-                        ? (reactionsEl.getAttribute('aria-label') || reactionsEl.innerText || '').trim()
-                        : '';
+                    // Reaction/comment COUNT elements have aria-labels starting with a digit (e.g. "23 reactions")
+                    // The Like action BUTTON has aria-label "Reaction button state: no reaction" — starts with capital R, not a digit
+                    // Walk all [aria-label] elements inside container and pick the count ones only
+                    let likes = '';
+                    let comments = '';
+                    const ariaEls = Array.from(container.querySelectorAll('[aria-label]'));
+                    for (const el of ariaEls) {
+                        const label = el.getAttribute('aria-label') || '';
+                        if (/^\\d/.test(label)) {
+                            const lower = label.toLowerCase();
+                            if (lower.includes('reaction') && !likes) likes = label;
+                            else if (lower.includes('comment') && !comments) comments = label;
+                        }
+                    }
 
                     if (content.length > 20) {
-                        results.push({ postUrl, author, content, timestamp, likes, comments: '', dedupeKey });
+                        results.push({ postUrl, author, content, timestamp, likes, comments, dedupeKey });
                     }
                 }
                 return results;
