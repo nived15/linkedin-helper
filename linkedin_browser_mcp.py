@@ -9,6 +9,7 @@ import time
 import logging
 import sys
 from pathlib import Path
+from urllib.parse import quote
 
 # Set up logging to stderr only
 logging.basicConfig(
@@ -140,7 +141,7 @@ async def load_cookies(context, platform):
 class BrowserSession:
     """Context manager for browser sessions with cookie persistence"""
     
-    def __init__(self, platform='linkedin', headless=True, launch_timeout=30000, max_retries=3):
+    def __init__(self, platform='linkedin', headless=False, launch_timeout=30000, max_retries=3):
         logger.info(f"Initializing {platform} browser session (headless: {headless})")
         self.platform = platform
         self.headless = headless
@@ -258,7 +259,7 @@ class BrowserSession:
         page = await self.context.new_page()
         if url:
             try:
-                await page.goto(url, wait_until='networkidle', timeout=30000)
+                await page.goto(url, wait_until='domcontentloaded', timeout=30000)
             except Exception as e:
                 logger.error(f"Error navigating to {url}: {str(e)}")
                 raise
@@ -289,7 +290,7 @@ async def login_linkedin(username: str | None = None, password: str | None = Non
             await page.set_viewport_size({'width': 1280, 'height': 800})
             
             # Navigate to LinkedIn login
-            await page.goto('https://www.linkedin.com/login', wait_until='networkidle')
+            await page.goto('https://www.linkedin.com/login', wait_until='domcontentloaded')
             
             # Check if already logged in
             if 'feed' in page.url:
@@ -460,63 +461,129 @@ async def browse_linkedin_feed(ctx: Context, count: int = 5) -> dict:
                 
             ctx.info(f"Browsing feed for {count} posts...")
             
+            # Wait for the feed to load before starting scroll loop
+            await page.wait_for_timeout(3000)
+
             # Scroll to load content
             for i in range(min(count, 20)):  # Limit to reasonable number
                 report_progress(ctx, i, count, f"Loading post {i+1}/{count}")
                 
                 try:
-                    # Wait for posts to be visible
-                    await page.wait_for_selector('.feed-shared-update-v2', timeout=5000)
+                    # Try multiple selectors — LinkedIn updates class names frequently
+                    post_selector = None
+                    for selector in [
+                        '[data-urn*="urn:li:activity"]',
+                        '[data-id*="urn:li:activity"]',
+                        '.feed-shared-update-v2',
+                        '.occludable-update',
+                        'div[data-urn]',
+                    ]:
+                        try:
+                            await page.wait_for_selector(selector, timeout=4000)
+                            post_selector = selector
+                            break
+                        except Exception:
+                            continue
+
+                    if not post_selector:
+                        errors.append(f"Error during scroll {i}: No feed post elements found on page")
+                        await page.evaluate('window.scrollBy(0, 800)')
+                        await page.wait_for_timeout(1500)
+                        continue
                     
                     # Extract visible posts
                     new_posts = await page.evaluate('''() => {
-                        return Array.from(document.querySelectorAll('.feed-shared-update-v2'))
-                            .map(post => {
-                                try {
-                                    // Extract post URL from the activity URN or share link
-                                    let postUrl = null;
-                                    const urn = post.getAttribute('data-urn');
-                                    if (urn) {
-                                        const activityId = urn.split(':').pop();
-                                        postUrl = 'https://www.linkedin.com/feed/update/urn:li:activity:' + activityId;
-                                    }
-                                    if (!postUrl) {
-                                        const shareLink = post.querySelector('a[href*="/feed/update/"]');
-                                        if (shareLink) postUrl = shareLink.href.split('?')[0];
-                                    }
-                                    
-                                    // Extract author profile URL
-                                    const authorLink = post.querySelector('.feed-shared-actor__container-link, .update-components-actor__container-link');
-                                    const authorProfileUrl = authorLink ? authorLink.href.split('?')[0] : null;
-                                    
-                                    // Parse likes count
-                                    const likesText = post.querySelector('.social-details-social-counts__reactions-count')?.innerText?.trim() || '0';
-                                    const likesCount = parseInt(likesText.replace(/[^0-9]/g, '')) || 0;
-                                    
-                                    // Parse comments count
-                                    let commentsCount = 0;
-                                    const socialCountButtons = post.querySelectorAll('.social-details-social-counts__comments, button[aria-label*="comment"]');
-                                    for (const btn of socialCountButtons) {
-                                        const text = btn.innerText?.trim() || btn.getAttribute('aria-label') || '';
-                                        const match = text.match(/([0-9]+)/);
-                                        if (match) { commentsCount = parseInt(match[1]); break; }
-                                    }
-                                    
-                                    return {
-                                        author: post.querySelector('.feed-shared-actor__name')?.innerText?.trim() || 'Unknown',
-                                        author_headline: post.querySelector('.feed-shared-actor__description')?.innerText?.trim() || '',
-                                        author_profile_url: authorProfileUrl,
-                                        content: post.querySelector('.feed-shared-text')?.innerText?.trim() || '',
-                                        timestamp: post.querySelector('.feed-shared-actor__sub-description')?.innerText?.trim() || '',
-                                        post_url: postUrl,
-                                        likes_count: likesCount,
-                                        comments_count: commentsCount
-                                    };
-                                } catch (e) {
-                                    return null;
+                        // Try multiple selectors in order
+                        const selectors = [
+                            '[data-urn*="urn:li:activity"]',
+                            '[data-id*="urn:li:activity"]',
+                            ".feed-shared-update-v2",
+                            ".occludable-update",
+                            "div[data-urn]"
+                        ];
+                        let postElements = [];
+                        for (const sel of selectors) {
+                            const els = document.querySelectorAll(sel);
+                            if (els.length > 0) { postElements = Array.from(els); break; }
+                        }
+
+                        const getText = (el, ...sels) => {
+                            for (const s of sels) {
+                                const found = el.querySelector(s);
+                                if (found && found.innerText.trim()) return found.innerText.trim();
+                            }
+                            return '';
+                        };
+
+                        return postElements.map(post => {
+                            try {
+                                // Post URL: prefer data-urn attribute
+                                let postUrl = null;
+                                const urn = post.getAttribute('data-urn') || post.getAttribute('data-id') || '';
+                                if (urn.includes('activity')) {
+                                    const activityId = urn.split(':').pop();
+                                    postUrl = 'https://www.linkedin.com/feed/update/urn:li:activity:' + activityId;
                                 }
-                            })
-                            .filter(p => p !== null);
+                                if (!postUrl) {
+                                    const shareLink = post.querySelector('a[href*="/feed/update/"]');
+                                    if (shareLink) postUrl = shareLink.href.split('?')[0];
+                                }
+
+                                // Author profile URL
+                                const authorLink = post.querySelector(
+                                    '.update-components-actor__container-link, .feed-shared-actor__container-link, a[href*="/in/"]'
+                                );
+                                const authorProfileUrl = authorLink ? authorLink.href.split('?')[0] : null;
+
+                                // Likes
+                                const likesText = getText(post,
+                                    '.social-details-social-counts__reactions-count',
+                                    'button[aria-label*="reaction"] span',
+                                    '[aria-label*="like"] span'
+                                );
+                                const likesCount = parseInt((likesText || '0').replace(/[^0-9]/g, '')) || 0;
+
+                                // Comments
+                                let commentsCount = 0;
+                                for (const btn of post.querySelectorAll(
+                                    '.social-details-social-counts__comments, button[aria-label*="comment"]'
+                                )) {
+                                    const t = btn.innerText?.trim() || btn.getAttribute('aria-label') || '';
+                                    const m = t.match(/([0-9]+)/);
+                                    if (m) { commentsCount = parseInt(m[1]); break; }
+                                }
+
+                                return {
+                                    author: getText(post,
+                                        '.update-components-actor__name span[aria-hidden="true"]',
+                                        '.update-components-actor__name',
+                                        '.feed-shared-actor__name'
+                                    ) || 'Unknown',
+                                    author_headline: getText(post,
+                                        '.update-components-actor__description span[aria-hidden="true"]',
+                                        '.update-components-actor__description',
+                                        '.feed-shared-actor__description'
+                                    ),
+                                    author_profile_url: authorProfileUrl,
+                                    content: getText(post,
+                                        '.update-components-text span[dir]',
+                                        '.update-components-text',
+                                        '.feed-shared-text__text-view span[dir]',
+                                        '.feed-shared-text'
+                                    ),
+                                    timestamp: getText(post,
+                                        '.update-components-actor__sub-description span[aria-hidden="true"]',
+                                        '.update-components-actor__sub-description',
+                                        '.feed-shared-actor__sub-description'
+                                    ),
+                                    post_url: postUrl,
+                                    likes_count: likesCount,
+                                    comments_count: commentsCount
+                                };
+                            } catch (e) {
+                                return null;
+                            }
+                        }).filter(p => p !== null && (p.content || p.author !== 'Unknown'));
                     }''')
                     
                     # Add new posts to our collection, avoiding duplicates
@@ -943,6 +1010,322 @@ async def send_connection_request(profile_url: str, ctx: Context, note: str | No
             return {
                 "status": "error",
                 "message": f"Failed to send connection request: {str(e)}"
+            }
+
+
+@mcp.tool()
+async def search_linkedin_posts(query: str, ctx: Context, count: int = 10) -> dict:
+    """Search for LinkedIn posts matching a keyword query and return them with metadata.
+
+    Args:
+        query: Search keyword, e.g. "GitHub Copilot"
+        ctx: MCP context
+        count: Number of posts to retrieve (default: 10)
+
+    Returns:
+        dict: status, query, count, and posts array.
+              Each post has: post_number, post_url, author, content, timestamp, likes, comments
+    """
+    async with BrowserSession(platform='linkedin', headless=False) as session:
+        try:
+            search_url = f'https://www.linkedin.com/search/results/content/?keywords={quote(query)}&sortBy=date_posted'
+            page = await session.new_page(search_url)
+
+            if 'login' in page.url or 'authwall' in page.url:
+                return {
+                    "status": "error",
+                    "message": "Not logged in. Please run login_linkedin_secure tool first"
+                }
+
+            if ctx:
+                ctx.info(f"Searching LinkedIn posts for: {query}")
+            report_progress(ctx, 10, 100, "Loading search results...")
+
+            # LinkedIn's React app takes ~10s to fully hydrate search results
+            await page.wait_for_timeout(10000)
+            report_progress(ctx, 30, 100, "Extracting posts...")
+
+            collected = []
+            scroll_attempts = 0
+            max_scrolls = 10
+
+            EXTRACT_JS = """(alreadySeen) => {
+                const results = [];
+                const seenKeys = new Set(alreadySeen);
+
+                const authorLinks = Array.from(document.querySelectorAll('a[href*="linkedin.com/in/"]'));
+
+                for (const aLink of authorLinks) {
+                    let container = aLink.parentElement;
+                    let depth = 0;
+                    while (container && depth < 25) {
+                        const text = (container.innerText || '').trim();
+                        if (text.length > 300 && text.length < 12000) break;
+                        depth++;
+                        container = container.parentElement;
+                    }
+                    if (!container) continue;
+
+                    const containerText = (container.innerText || '').trim();
+                    if (containerText.length < 100) continue;
+
+                    const dedupeKey = containerText.slice(0, 80);
+                    if (seenKeys.has(dedupeKey)) continue;
+                    seenKeys.add(dedupeKey);
+
+                    let author = '';
+                    const inLinks = Array.from(container.querySelectorAll('a[href*="linkedin.com/in/"]'));
+                    for (const il of inLinks) {
+                        const hiddenSpan = il.querySelector('span[aria-hidden="true"]');
+                        let raw = hiddenSpan ? hiddenSpan.textContent.trim() : (il.textContent || '').trim().replace(/\\s+/g, ' ');
+                        let candidate = raw.split('•')[0].trim().split('\\n')[0].trim();
+                        if (candidate.length >= 2 && candidate.length <= 60) {
+                            author = candidate;
+                            break;
+                        }
+                    }
+                    if (!author) {
+                        for (const line of containerText.split('\\n').map(l => l.trim()).filter(Boolean).slice(0, 8)) {
+                            if (line.length >= 3 && line.length <= 60 && !line.match(/^(Feed post|Follow|\\d|•|http)/i)) {
+                                author = line;
+                                break;
+                            }
+                        }
+                    }
+
+                    let postUrl = '';
+                    const feedLink = container.querySelector('a[href*="feed/update/urn:li:"]');
+                    if (feedLink) {
+                        postUrl = feedLink.href.split('?')[0];
+                    } else {
+                        const profileLink = container.querySelector('a[href*="linkedin.com/in/"]');
+                        if (profileLink) postUrl = profileLink.href.split('?')[0];
+                    }
+
+                    const timeMatch = containerText.match(/\\b(\\d+[smh]\\b|\\d+[dw]\\b|\\d+ (min|hour|day|week|month)s? ago|just now)/i);
+                    const timestamp = timeMatch ? timeMatch[0] : '';
+
+                    const allLines = containerText.split('\\n').map(l => l.trim()).filter(Boolean);
+                    const followIdx = allLines.findIndex(l => l.match(/^Follow$/i));
+                    const bodyStart = followIdx >= 0 ? followIdx + 1 : 4;
+                    const contentLines = allLines.slice(bodyStart)
+                        .filter(l => l.length > 15)
+                        .filter(l => !l.match(/^(Feed post|Like|Comment|Repost|Send|View my services|\\d+$)/i));
+                    const content = contentLines.join(' ').slice(0, 600);
+
+                    const reactionsEl = container.querySelector('[aria-label*="reaction"], [aria-label*="like"]');
+                    const likes = reactionsEl
+                        ? (reactionsEl.getAttribute('aria-label') || reactionsEl.innerText || '').trim()
+                        : '';
+
+                    if (content.length > 20) {
+                        results.push({ postUrl, author, content, timestamp, likes, comments: '', dedupeKey });
+                    }
+                }
+                return results;
+            }"""
+
+            seen_keys = []
+
+            while len(collected) < count and scroll_attempts < max_scrolls:
+                new_posts = await page.evaluate(EXTRACT_JS, seen_keys)
+
+                for post in new_posts:
+                    key = post['dedupeKey']
+                    if key not in seen_keys:
+                        seen_keys.append(key)
+                        collected.append(post)
+
+                if len(collected) >= count:
+                    break
+
+                await page.evaluate("""() => {
+                    const main = document.querySelector('main#workspace') || document.querySelector('main');
+                    if (main) {
+                        main.scrollTop = main.scrollHeight;
+                    } else {
+                        window.scrollTo(0, document.body.scrollHeight);
+                    }
+                }""")
+                await page.wait_for_timeout(3000)
+                scroll_attempts += 1
+                report_progress(ctx, 30 + scroll_attempts * 5, 100, f"Found {len(collected)} posts so far...")
+
+            posts = []
+            for idx, p in enumerate(collected[:count], start=1):
+                posts.append({
+                    "post_number": idx,
+                    "post_url": p['postUrl'],
+                    "author": p['author'] or 'Unknown',
+                    "content": p['content'][:400] + ('...' if len(p['content']) > 400 else ''),
+                    "timestamp": p['timestamp'],
+                    "likes": p['likes'],
+                    "comments": p['comments']
+                })
+
+            await session.save_session(page)
+            report_progress(ctx, 100, 100, f"Collected {len(posts)} posts")
+
+            return {
+                "status": "success",
+                "query": query,
+                "count": len(posts),
+                "posts": posts
+            }
+
+        except Exception as e:
+            logger.error(f"Post search failed: {str(e)}")
+            return {
+                "status": "error",
+                "message": f"Failed to search posts: {str(e)}"
+            }
+
+
+@mcp.tool()
+async def comment_on_approved_posts(approved_posts: list, ctx: Context) -> dict:
+    """Post comments on a list of user-approved LinkedIn posts.
+
+    Call this ONLY after the user has reviewed and approved the posts and their comments.
+
+    Args:
+        approved_posts: List of dicts, each with 'post_url' and 'comment' keys.
+        ctx: MCP context
+
+    Returns:
+        dict: status, summary (total/succeeded/failed), and per-post results
+    """
+    if not approved_posts:
+        return {"status": "error", "message": "No posts provided"}
+
+    results = []
+
+    async with BrowserSession(platform='linkedin', headless=False) as session:
+        try:
+            page = await session.new_page('https://www.linkedin.com/feed/')
+            if 'login' in page.url or 'authwall' in page.url:
+                return {
+                    "status": "error",
+                    "message": "Not logged in. Please run login_linkedin_secure tool first"
+                }
+
+            total = len(approved_posts)
+
+            for i, item in enumerate(approved_posts):
+                post_url = item.get('post_url', '').strip()
+                comment_text = item.get('comment', '').strip()
+
+                if not post_url or not comment_text:
+                    results.append({
+                        "post_url": post_url,
+                        "status": "skipped",
+                        "message": "Missing post_url or comment"
+                    })
+                    continue
+
+                report_progress(ctx, i, total, f"Commenting on post {i + 1}/{total}")
+                if ctx:
+                    ctx.info(f"Navigating to: {post_url}")
+
+                try:
+                    nav_url = post_url
+                    is_profile_fallback = '/in/' in post_url and '/feed/update/' not in post_url and '/posts/' not in post_url
+                    if is_profile_fallback:
+                        nav_url = post_url.rstrip('/') + '/recent-activity/all/'
+
+                    await page.goto(nav_url, wait_until='domcontentloaded', timeout=60000)
+
+                    if 'login' in page.url or 'authwall' in page.url:
+                        results.append({"post_url": post_url, "status": "error", "message": "Session expired"})
+                        continue
+
+                    await page.wait_for_selector(
+                        '.feed-shared-update-v2, .update-components-update-v2, '
+                        '.occludable-update, [data-urn]',
+                        timeout=20000
+                    )
+                    await page.wait_for_timeout(1500)
+
+                    comment_trigger = await page.query_selector(
+                        'button.comment-button, '
+                        'button[aria-label*="omment"], '
+                        'button[aria-label*="Comment"], '
+                        '.comments-comment-box__trigger, '
+                        'button.comments-comment-box__trigger'
+                    )
+                    if comment_trigger:
+                        try:
+                            await comment_trigger.click()
+                        except Exception:
+                            pass
+                    else:
+                        await page.evaluate('''() => {
+                            const btn = Array.from(document.querySelectorAll('button'))
+                                .find(b => (b.innerText || '').trim().toLowerCase() === 'comment');
+                            if (btn) btn.click();
+                        }''')
+                    await page.wait_for_timeout(1200)
+
+                    editor = await page.wait_for_selector(
+                        '.ql-editor[contenteditable="true"], '
+                        '.comments-comment-box__text-editor [contenteditable="true"], '
+                        'div[contenteditable="true"][role="textbox"]',
+                        timeout=8000
+                    )
+                    await editor.click()
+                    await editor.type(comment_text, delay=25)
+                    await page.wait_for_timeout(600)
+
+                    submit_btn = await page.query_selector(
+                        'button.comments-comment-box__submit-button--cr, '
+                        'button.comments-comment-box__submit-button, '
+                        'button[type="submit"].comments-comment-box__submit-button--cr, '
+                        'button[type="submit"].comments-comment-box__submit-button'
+                    )
+                    if not submit_btn:
+                        submitted = await page.evaluate('''() => {
+                            const editor = document.querySelector('.ql-editor[contenteditable="true"], div[contenteditable="true"][role="textbox"]');
+                            if (!editor) return false;
+                            let el = editor;
+                            for (let i = 0; i < 8; i++) {
+                                el = el.parentElement;
+                                if (!el) break;
+                                const btn = el.querySelector('button[type="submit"], button.comments-comment-box__submit-button--cr, button.comments-comment-box__submit-button');
+                                if (btn) { btn.click(); return true; }
+                            }
+                            return false;
+                        }''')
+                        if submitted:
+                            await page.wait_for_timeout(2500)
+                            results.append({"post_url": post_url, "status": "success", "message": "Comment posted successfully", "comment": comment_text})
+                        else:
+                            results.append({"post_url": post_url, "status": "error", "message": "Submit button not found"})
+                        continue
+                    else:
+                        await submit_btn.click()
+                        await page.wait_for_timeout(2500)
+                        results.append({"post_url": post_url, "status": "success", "message": "Comment posted successfully", "comment": comment_text})
+
+                except Exception as e:
+                    logger.error(f"Error commenting on {post_url}: {str(e)}")
+                    results.append({"post_url": post_url, "status": "error", "message": str(e)})
+
+                await asyncio.sleep(4)
+
+            await session.save_session(page)
+            success_count = sum(1 for r in results if r['status'] == 'success')
+            report_progress(ctx, total, total, f"Done: {success_count}/{total} comments posted")
+
+            return {
+                "status": "success",
+                "summary": {"total": total, "succeeded": success_count, "failed": total - success_count},
+                "results": results
+            }
+
+        except Exception as e:
+            return {
+                "status": "error",
+                "message": f"Failed to post comments: {str(e)}",
+                "results": results
             }
 
 
