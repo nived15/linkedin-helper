@@ -1,0 +1,43 @@
+# LinkedIn Automation — Copilot Instructions
+
+## Who This Is For
+
+Nived Velayudhan — AI/dev tools content creator building toward 100,000 LinkedIn followers by end of 2026.
+
+## Niche
+
+AI, developer tools, and software engineering: GitHub Copilot, Claude, LLMs, dev productivity, software engineering best practices.
+
+## Goal
+
+Automate LinkedIn engagement — posting, commenting, networking, analytics — while keeping Nived in the loop for all public-facing actions.
+
+## Architecture
+
+- **MCP Server** (`linkedin_browser_mcp.py`): FastMCP Python server exposing LinkedIn automation as callable tools.
+- **Browser Automation**: Playwright (Chromium) drives LinkedIn's web UI. No unofficial APIs.
+- **Session Management**: Encrypted cookies (`cryptography.Fernet`) stored in `sessions/`. Login once, reuse across all runs.
+- **Data Layer**: All state lives in JSON files under `data/`. Human-readable, version-controllable, editable by Nived.
+
+## Available MCP Tools
+
+These are the tools exposed by the LinkedIn MCP server (`linkedin` server name):
+
+| Tool | Purpose |
+| --- | --- |
+| `login_linkedin` | Log in with username/password |
+| `login_linkedin_secure` | Log in using `.env` credentials |
+| `get_linkedin_profile` | Fetch a profile by username |
+| `browse_linkedin_feed` | Browse the feed and return recent posts |
+| `search_linkedin_profiles` | Search for profiles by keyword |
+| `view_linkedin_profile` | View a profile by URL |
+| `interact_with_linkedin_post` | Like, comment, or share a post |
+
+## Rules
+
+1. **Human-in-the-loop**: Never post content, comment, or send connection requests without staging them for Nived's review first. Write to a `data/` JSON file, tell Nived to review, then execute only after approval.
+2. **Rate limiting**: Add randomised delays (10–60s) between LinkedIn actions. Never exceed 100 connection requests/week. Never exceed 50 actions/hour.
+3. **Session reuse**: Always load existing cookies from `sessions/` before attempting login. Only log in fresh if cookies are expired or missing.
+4. **Fail loudly**: If a session expires, a challenge appears, or LinkedIn returns an unexpected page, report the error clearly. Do not retry silently.
+5. **Flat file storage**: All data goes in `data/` as JSON. No databases. Keep files human-readable.
+6. **Tone**: Nived's voice is direct, practical, technical — no corporate fluff, no motivational clichés. Write like someone who builds things.
