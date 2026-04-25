@@ -386,7 +386,7 @@ async def get_linkedin_profile(username: str, ctx: Context) -> dict:
                 for (const el of followerElements) {
                     const text = el.innerText.trim().toLowerCase();
                     if (text.includes('follower')) {
-                        const match = text.match(/([\d,]+)/);
+                        const match = text.match(/([0-9,]+)/);
                         if (match) followerCount = parseInt(match[1].replace(/,/g, ''));
                     }
                 }
@@ -396,7 +396,7 @@ async def get_linkedin_profile(username: str, ctx: Context) -> dict:
                     for (const span of allSpans) {
                         const text = span.innerText.trim().toLowerCase();
                         if (text.includes('follower')) {
-                            const match = text.match(/([\d,]+)/);
+                            const match = text.match(/([0-9,]+)/);
                             if (match) followerCount = parseInt(match[1].replace(/,/g, ''));
                             break;
                         }
@@ -412,7 +412,7 @@ async def get_linkedin_profile(username: str, ctx: Context) -> dict:
                         const el = document.querySelector('.pv-top-card--list-bullet .t-bold');
                         if (el) {
                             const text = el.innerText.trim();
-                            const match = text.match(/([\d,]+)/);
+                            const match = text.match(/([0-9,]+)/);
                             if (match && !text.toLowerCase().includes('follower')) return parseInt(match[1].replace(/,/g, ''));
                         }
                         return null;
@@ -498,7 +498,7 @@ async def browse_linkedin_feed(ctx: Context, count: int = 5) -> dict:
                                     const socialCountButtons = post.querySelectorAll('.social-details-social-counts__comments, button[aria-label*="comment"]');
                                     for (const btn of socialCountButtons) {
                                         const text = btn.innerText?.trim() || btn.getAttribute('aria-label') || '';
-                                        const match = text.match(/(\d+)/);
+                                        const match = text.match(/([0-9]+)/);
                                         if (match) { commentsCount = parseInt(match[1]); break; }
                                     }
                                     
