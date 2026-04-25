@@ -15,6 +15,7 @@ venv/
 sessions/
 *_cookies.json
 login_attempts.json
+data/
 
 # Python cache files
 __pycache__/
@@ -50,3 +51,6 @@ Thumbs.db
 
 # Logs
 *.log
+
+#gitignore
+.gitignore

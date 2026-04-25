@@ -21,19 +21,23 @@ Find trending posts in the AI/developer tools niche, draft thoughtful comments, 
 
 ### Phase 1 — Discover
 
-1. Use MCP `browse_linkedin_feed` and web search to find top 20 posts by engagement.
-2. Draft a comment for each.
+1. Use MCP `search_linkedin_posts` with targeted keywords to find top 20 posts by engagement.
+   - Run separate searches for: `GitHub Copilot`, `Claude AI`, `AI agents`, `LLMs`, `developer productivity`, `MCP model context protocol`
+   - Prefer posts that have actual engagement numbers (likes/comments > 0).
+2. Draft a comment for each following the `trending-workflow` skill's comment template.
 3. Save to `data/trending_queue.json` with status `staged`.
 4. Ask Nived to review.
 
 ### Phase 2 — Engage
 
 1. Read `data/trending_queue.json` for `approved` entries.
-2. Like and comment on each using MCP `interact_with_linkedin_post`.
-3. Update status to `engaged` with timestamp.
+2. Like each post using MCP `interact_with_linkedin_post` with action `like`.
+3. Post comments using MCP `comment_on_approved_posts` (batches all approved posts in one call).
+4. Update status to `engaged` with timestamp.
 
 ## MCP Tools Available
 
 - `login_linkedin_secure` — ensure session is active
-- `browse_linkedin_feed` — fetch recent feed posts
-- `interact_with_linkedin_post` — like or comment on posts
+- `search_linkedin_posts` — search LinkedIn content by keyword (use this for Phase 1, not browse_linkedin_feed)
+- `interact_with_linkedin_post` — like or comment on a single post
+- `comment_on_approved_posts` — batch comment on all approved posts from trending_queue.json

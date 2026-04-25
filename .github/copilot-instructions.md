@@ -32,6 +32,7 @@ These are the tools exposed by the LinkedIn MCP server (`linkedin` server name):
 | `search_linkedin_profiles` | Search for profiles by keyword |
 | `view_linkedin_profile` | View a profile by URL |
 | `interact_with_linkedin_post` | Like, comment, or share a post |
+| `send_connection_request` | Send a connection request with optional personalised note |
 
 ## Rules
 
