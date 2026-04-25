@@ -1020,13 +1020,14 @@ async def send_connection_request(profile_url: str, ctx: Context, note: str | No
 
 
 @mcp.tool()
-async def search_linkedin_posts(query: str, ctx: Context, count: int = 10) -> dict:
+async def search_linkedin_posts(query: str, ctx: Context, count: int = 10, sort_by: str = "relevance") -> dict:
     """Search for LinkedIn posts matching a keyword query and return them with metadata.
 
     Args:
         query: Search keyword, e.g. "GitHub Copilot"
         ctx: MCP context
         count: Number of posts to retrieve (default: 10)
+        sort_by: Sort order — "relevance" (default, surfaces high-engagement posts) or "date_posted"
 
     Returns:
         dict: status, query, count, and posts array.
@@ -1034,7 +1035,11 @@ async def search_linkedin_posts(query: str, ctx: Context, count: int = 10) -> di
     """
     async with BrowserSession(platform='linkedin', headless=False) as session:
         try:
-            search_url = f'https://www.linkedin.com/search/results/content/?keywords={quote(query)}&sortBy=date_posted'
+            if sort_by == "date_posted":
+                search_url = f'https://www.linkedin.com/search/results/content/?keywords={quote(query)}&sortBy=date_posted'
+            else:
+                # Relevance sort (LinkedIn default) surfaces popular/high-engagement posts
+                search_url = f'https://www.linkedin.com/search/results/content/?keywords={quote(query)}'
             page = await session.new_page(search_url)
 
             if 'login' in page.url or 'authwall' in page.url:
@@ -1149,19 +1154,53 @@ async def search_linkedin_posts(query: str, ctx: Context, count: int = 10) -> di
                         .filter(l => !l.match(/^(Feed post|Like|Comment|Repost|Send|View my services|\\d+$)/i));
                     const content = contentLines.join(' ').slice(0, 600);
 
-                    // Reaction/comment COUNT elements have aria-labels starting with a digit (e.g. "23 reactions")
-                    // The Like action BUTTON has aria-label "Reaction button state: no reaction" — starts with capital R, not a digit
-                    // Walk all [aria-label] elements inside container and pick the count ones only
+                    // Engagement counts: LinkedIn renders them as aria-labels in various formats:
+                    //   "23 reactions", "View 23 reactions", "1,234 reactions", "45 comments", etc.
+                    // Strategy 1: aria-label attributes anywhere inside container
+                    // Strategy 2: text content of known LinkedIn social-count elements
+                    // Strategy 3: innerText scan for numeric + keyword patterns
                     let likes = '';
                     let comments = '';
+
+                    // Strategy 1: aria-label scan (handles "23 reactions" AND "View 23 reactions")
                     const ariaEls = Array.from(container.querySelectorAll('[aria-label]'));
                     for (const el of ariaEls) {
                         const label = el.getAttribute('aria-label') || '';
-                        if (/^\\d/.test(label)) {
-                            const lower = label.toLowerCase();
-                            if (lower.includes('reaction') && !likes) likes = label;
-                            else if (lower.includes('comment') && !comments) comments = label;
+                        const lower = label.toLowerCase();
+                        // Match "23 reactions", "View 23 reactions", "1,234 reactions", etc.
+                        if (/\\d/.test(label) && lower.includes('reaction') && !likes) {
+                            const m = label.match(/[\\d,]+/);
+                            if (m) likes = m[0].replace(/,/g, '') + ' reactions';
+                        } else if (/\\d/.test(label) && lower.includes('comment') && !comments) {
+                            const m = label.match(/[\\d,]+/);
+                            if (m) comments = m[0].replace(/,/g, '') + ' comments';
                         }
+                    }
+
+                    // Strategy 2: known LinkedIn social-count CSS classes
+                    if (!likes) {
+                        const rxEl = container.querySelector('.social-details-social-counts__reactions-count, [class*="reactions-count"], [class*="social-counts"] span');
+                        if (rxEl) {
+                            const txt = (rxEl.innerText || '').trim();
+                            if (/^[\\d,]+$/.test(txt)) likes = txt.replace(/,/g, '') + ' reactions';
+                        }
+                    }
+                    if (!comments) {
+                        const cmEl = container.querySelector('[class*="comments-count"], [class*="comment-count"]');
+                        if (cmEl) {
+                            const txt = (cmEl.innerText || '').trim();
+                            if (/^[\\d,]+$/.test(txt)) comments = txt.replace(/,/g, '') + ' comments';
+                        }
+                    }
+
+                    // Strategy 3: scan containerText for patterns like "1,234 reactions" or "45 comments"
+                    if (!likes) {
+                        const rxMatch = containerText.match(/([\\d,]+)\\s+reaction/i);
+                        if (rxMatch) likes = rxMatch[1].replace(/,/g, '') + ' reactions';
+                    }
+                    if (!comments) {
+                        const cmMatch = containerText.match(/([\\d,]+)\\s+comment/i);
+                        if (cmMatch) comments = cmMatch[1].replace(/,/g, '') + ' comments';
                     }
 
                     if (content.length > 20 && postUrl && (postUrl.includes('/feed/update/') || postUrl.includes('/posts/'))) {
