@@ -6,6 +6,7 @@ import json
 from dotenv import load_dotenv
 from cryptography.fernet import Fernet
 import time
+import random
 import logging
 import sys
 from pathlib import Path
@@ -183,6 +184,7 @@ class BrowserSession:
 
     def __init__(self, platform='linkedin', headless=False, **_kwargs):
         self.platform = platform
+        self.headless = headless
 
     # -- context-manager interface (keeps existing tool code unchanged) -------
 
@@ -228,7 +230,7 @@ class BrowserSession:
             async_playwright().start(), timeout=30,
         )
         BrowserSession._browser = await BrowserSession._playwright.chromium.launch(
-            headless=False,
+            headless=self.headless,
             timeout=30000,
             args=[
                 '--disable-dev-shm-usage',
@@ -354,8 +356,16 @@ async def login_linkedin_secure(ctx: Context | None = None) -> dict:
     username = os.getenv('LINKEDIN_USERNAME', '').strip()
     password = os.getenv('LINKEDIN_PASSWORD', '').strip()
     
-    # We'll pass the credentials to pre-fill them, but user can still modify them
-    return await login_linkedin(username if username else None, password if password else None, ctx)
+    if not username and not password:
+        return {"status": "error", "message": "Missing LinkedIn credentials in environment"}
+    
+    if '@' not in username:
+        return {"status": "error", "message": "Invalid email format for LINKEDIN_USERNAME"}
+    
+    if len(password) < 8:
+        return {"status": "error", "message": "Invalid credentials: password must be at least 8 characters"}
+    
+    return await login_linkedin(username, password, ctx)
 
 @mcp.tool()
 async def get_linkedin_profile(username: str, ctx: Context) -> dict:
@@ -632,7 +642,7 @@ async def search_linkedin_profiles(query: str, ctx: Context, count: int = 5) -> 
     """Search for LinkedIn profiles matching a query"""
     async with BrowserSession(platform='linkedin') as session:
         try:
-            search_url = f'https://www.linkedin.com/search/results/people/?keywords={query}'
+            search_url = f'https://www.linkedin.com/search/results/people/?keywords={quote(query)}'
             page = await session.new_page(search_url)
             
             # Check if we're logged in
@@ -716,7 +726,7 @@ async def view_linkedin_profile(profile_url: str, ctx: Context) -> dict:
             
             # Wait for profile to load
             await page.wait_for_selector('.pv-top-card', timeout=10000)
-            await ctx.report_progress(0.5, 1.0)
+            report_progress(ctx, 50, 100, "Extracting profile data...")
             
             # Extract profile information
             profile_data = await page.evaluate('''() => {
@@ -747,7 +757,7 @@ async def view_linkedin_profile(profile_url: str, ctx: Context) -> dict:
                 };
             }''')
             
-            await ctx.report_progress(1.0, 1.0)
+            report_progress(ctx, 100, 100, "Profile extraction complete")
             await session.save_session(page)
             
             return {

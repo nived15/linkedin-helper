@@ -27,8 +27,8 @@ async def test_browser_session():
     async with BrowserSession(platform='linkedin', headless=True) as session:
         page = await session.new_page()
         assert page is not None
-        assert session.browser is not None
-        assert session.context is not None
+        assert BrowserSession._browser is not None
+        assert BrowserSession._context is not None
 
 @pytest.mark.asyncio
 async def test_login_linkedin_secure_missing_credentials():

@@ -27,8 +27,8 @@ applyTo: "**/*.py"
 ## Error Handling
 
 - Wrap all Playwright operations in try/except. Catch `TimeoutError` and `Error` from Playwright specifically.
-- On failure, return a dict with `{"success": False, "error": "descriptive message"}` — never raise unhandled exceptions from MCP tools.
-- If LinkedIn shows a login wall or challenge, return `{"success": False, "error": "session_expired", "message": "..."}` so agents know to re-auth.
+- On failure, return a dict with `{"status": "error", "message": "descriptive message"}` — never raise unhandled exceptions from MCP tools.
+- If LinkedIn shows a login wall or challenge, return `{"status": "error", "message": "Session expired: ..."}` so agents know to re-auth.
 
 ## Data Files
 
@@ -49,7 +49,7 @@ async def tool_name(param: str, ctx: Context) -> dict:
         # 2. Perform action with delays
         # 3. Write results to data/ file
         # 4. Save session
-        return {"success": True, "data": result}
+        return {"status": "success", "data": result}
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        return {"status": "error", "message": str(e)}
 ```
