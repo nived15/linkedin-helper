@@ -8,7 +8,7 @@ description: "Review the content queue and publish approved LinkedIn posts. Use 
 ## When to Use
 
 - Nived says "post content", "post from queue", or "publish a post"
-- There are `approved` entries in `data/content_queue.json` ready to publish
+- There are `approved` entries in `data/content_queue.md` ready to publish
 
 ## Procedure
 

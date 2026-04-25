@@ -19,12 +19,12 @@ Track influential voices in the AI/developer tools niche, monitor their recent p
 
 ## Workflow
 
-1. Load `data/top_voices.json` — list of tracked profiles.
+1. Load `data/top_voices.md` — list of tracked profiles.
 2. For voices not checked in 24h, use MCP `view_linkedin_profile` and `browse_linkedin_feed` to fetch recent posts.
 3. Draft comments using the `voice-engagement` skill's tone notes.
 4. Display staged comments to Nived for approval.
 5. On approval, like and comment using MCP `interact_with_linkedin_post`.
-6. Update `data/top_voices.json` with last-checked timestamps.
+6. Update `data/top_voices.md` with last-checked timestamps.
 
 ## MCP Tools Available
 

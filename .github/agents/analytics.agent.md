@@ -20,8 +20,8 @@ Generate weekly growth reports that track follower count, post performance, netw
 
 1. Use MCP tools to fetch current profile stats (followers, views, impressions).
 2. Read the latest `data/analytics/YYYY-MM-DD.json` for week-over-week comparison.
-3. Read `data/content_queue.json` for posts published this week.
-4. Read `data/network_growth.json` for connection request stats.
+3. Read `data/content_queue.md` for posts published this week.
+4. Read `data/network_growth.md` for connection request stats.
 5. Populate the report using the `growth-report` skill's template.
 6. Save to `data/analytics/YYYY-MM-DD.json` and `data/analytics/YYYY-MM-DD-summary.md`.
 7. Display the summary in chat.

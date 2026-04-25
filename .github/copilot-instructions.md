@@ -17,7 +17,7 @@ Automate LinkedIn engagement — posting, commenting, networking, analytics — 
 - **MCP Server** (`linkedin_browser_mcp.py`): FastMCP Python server exposing LinkedIn automation as callable tools.
 - **Browser Automation**: Playwright (Chromium) drives LinkedIn's web UI. No unofficial APIs.
 - **Session Management**: Encrypted cookies (`cryptography.Fernet`) stored in `sessions/`. Login once, reuse across all runs.
-- **Data Layer**: All state lives in JSON files under `data/`. Human-readable, version-controllable, editable by Nived.
+- **Data Layer**: All state lives in Markdown files under `data/`. Human-readable, version-controllable, editable by Nived.
 
 ## Available MCP Tools
 
@@ -33,14 +33,17 @@ These are the tools exposed by the LinkedIn MCP server (`linkedin` server name):
 | `view_linkedin_profile` | View a profile by URL |
 | `interact_with_linkedin_post` | Like, comment, or share a post |
 | `send_connection_request` | Send a connection request with optional personalised note |
+| `search_linkedin_posts` | Search for posts by keyword with engagement data |
+| `comment_on_approved_posts` | Batch comment on a list of approved posts |
+| `close_browser` | Close the persistent browser session |
 
 ## Rules
 
-1. **Human-in-the-loop**: Never post content, comment, or send connection requests without staging them for Nived's review first. Write to a `data/` JSON file, tell Nived to review, then execute only after approval.
+1. **Human-in-the-loop**: Never post content, comment, or send connection requests without staging them for Nived's review first. Write to a `data/` Markdown file, tell Nived to review, then execute only after approval.
 2. **Rate limiting**: Add randomised delays (10–60s) between LinkedIn actions. Never exceed 100 connection requests/week. Never exceed 50 actions/hour.
 3. **Session reuse**: Always load existing cookies from `sessions/` before attempting login. Only log in fresh if cookies are expired or missing.
 4. **Fail loudly**: If a session expires, a challenge appears, or LinkedIn returns an unexpected page, report the error clearly. Do not retry silently.
-5. **Flat file storage**: All data goes in `data/` as JSON. No databases. Keep files human-readable.
+5. **Flat file storage**: All data goes in `data/` as Markdown. No databases. Keep files human-readable.
 6. **Tone**: Nived's voice is direct, practical, technical - no corporate fluff, no motivational clichés. Write like someone who builds things.
 
 ## Writing Style (applies to all posts, comments, and connection notes)

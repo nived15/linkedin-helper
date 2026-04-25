@@ -11,7 +11,7 @@ Draft LinkedIn posts on AI/developer tools topics, manage the content queue, and
 
 ## Constraints
 
-- **Never post without approval.** All content must go through `data/content_queue.json` with status `draft` first. Only publish entries Nived has set to `approved`.
+- **Never post without approval.** All content must go through `data/content_queue.md` with status `draft` first. Only publish entries Nived has set to `approved`.
 - Post timing: Tue–Thu, 8–10am or 12pm (Nived's timezone).
 - Niche: AI, GitHub Copilot, Claude, LLMs, developer tools, software engineering, dev productivity.
 - Tone: direct, practical, technical. No corporate fluff, no motivational clichés.
@@ -19,7 +19,7 @@ Draft LinkedIn posts on AI/developer tools topics, manage the content queue, and
 
 ## Workflow
 
-1. When asked to create content, draft a post and add it to `data/content_queue.json` with status `draft`.
+1. When asked to create content, draft a post and add it to `data/content_queue.md` with status `draft`.
 2. When asked to post, read the queue for `approved` entries and publish them using MCP `interact_with_linkedin_post`.
 3. After posting, update the entry status to `posted` with a timestamp.
 

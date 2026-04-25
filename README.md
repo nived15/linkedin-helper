@@ -12,7 +12,7 @@ A LinkedIn automation system built on [FastMCP](https://github.com/jlowin/fastmc
 flowchart TD
     A["🤖 GitHub Copilot Agent\n/post-content\n/trending-discover\n/grow-network"] -->|MCP Tool Call| B["⚙️ FastMCP Server\nlinkedin_browser_mcp.py"]
     B -->|Playwright| C["🌐 LinkedIn\n(Chromium browser)"]
-    B <-->|Read / Write| D["📂 data/\n(JSON files)"]
+    B <-->|Read / Write| D["📂 data/\n(Markdown files)"]
     B <-->|Load / Save| E["🔐 sessions/\n(encrypted cookies)"]
     C -->|Results| B
 ```
@@ -20,7 +20,7 @@ flowchart TD
 1. A Copilot agent in VS Code calls an MCP tool (e.g. `browse_linkedin_feed`).
 2. The FastMCP server receives the call, loads encrypted cookies from `sessions/`, and opens a Playwright browser — no login required after the first time.
 3. The browser executes the action on LinkedIn's web UI (no unofficial APIs).
-4. Results are written to JSON files under `data/`. Nived reviews staged content and comments before any public action is taken.
+4. Results are written to Markdown files under `data/`. Nived reviews staged content and comments before any public action is taken.
 5. Sessions are re-encrypted and saved back to `sessions/` after each run.
 
 ---
@@ -41,11 +41,11 @@ flowchart LR
         AN["📊 Analytics\n/weekly-analytics"]
     end
 
-    subgraph Data["data/ (JSON)"]
-        CQ[(content_queue.json)]
-        TQ[(trending_queue.json)]
-        TJ[(top_voices.json)]
-        NJ[(network_growth.json)]
+    subgraph Data["data/ (Markdown)"]
+        CQ[(content_queue.md)]
+        TQ[(trending_queue.md)]
+        TJ[(top_voices.md)]
+        NJ[(network_growth.md)]
         AJ[(analytics/)]
     end
 
@@ -75,7 +75,7 @@ flowchart LR
 ```mermaid
 flowchart LR
     A["/post-content"] --> B[Draft post]
-    B --> C[(data/content_queue.json\nstatus: draft)]
+    B --> C[(data/content_queue.md\nstatus: draft)]
     C --> D{{Nived reviews}}
     D -->|Approve| E[interact_with_linkedin_post]
     D -->|Edit| B
@@ -90,7 +90,7 @@ flowchart TD
     subgraph Phase1["Phase 1 — Discover  /trending-discover"]
         A[browse_linkedin_feed\n+ web search] --> B[Top 20 posts\nby engagement]
         B --> C[Draft comment\nper post]
-        C --> D[(data/trending_queue.json\nstatus: staged)]
+        C --> D[(data/trending_queue.md\nstatus: staged)]
         D --> E[[⏸ STOP — Nived reviews\nsets status → approved]]
     end
 
@@ -110,7 +110,7 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    A["/grow-network"] --> B[Read data/network_growth.json]
+    A["/grow-network"] --> B[Read data/network_growth.md]
     B --> C{Weekly cap\nreached?}
     C -->|Yes – 100 sent| D[🛑 Stop. Try next week.]
     C -->|No| E[search_linkedin_profiles\nniche keywords]
@@ -121,7 +121,7 @@ flowchart TD
     I -->|Confirm| J[Send connection requests]
     I -->|Edit notes| H
     I -->|Remove candidates| F
-    J --> K[(Log to network_growth.json\nstatus: pending)]
+    J --> K[(Log to network_growth.md\nstatus: pending)]
 ```
 
 ### Analytics
@@ -130,8 +130,8 @@ flowchart TD
 flowchart TD
     A["/weekly-analytics"] --> B[get_linkedin_profile\nfollower count]
     A --> C[Read latest\ndata/analytics/YYYY-MM-DD.json]
-    A --> D[Read data/content_queue.json\nposts this week]
-    A --> E[Read data/network_growth.json\nrequests sent / accepted]
+    A --> D[Read data/content_queue.md\nposts this week]
+    A --> E[Read data/network_growth.md\nrequests sent / accepted]
     B & C & D & E --> F[Compute deltas\nPopulate report template]
     F --> G[(data/analytics/\nYYYY-MM-DD.json)]
     F --> H[(data/analytics/\nYYYY-MM-DD-summary.md)]
@@ -151,11 +151,11 @@ mcp-linkedin-server/
 ├── sessions/
 │   └── linkedin_cookies.json    # Fernet-encrypted cookies (not committed)
 │
-├── data/                        # All agent state — human-readable JSON
-│   ├── content_queue.json       # Posts: draft → approved → posted
-│   ├── trending_queue.json      # Trending posts: staged → approved → engaged
-│   ├── top_voices.json          # Tracked influencers + last-checked timestamps
-│   ├── network_growth.json      # Connection requests: pending → accepted/declined
+├── data/                        # All agent state — human-readable Markdown
+│   ├── content_queue.md         # Posts: draft → approved → posted
+│   ├── trending_queue.md        # Trending posts: staged → approved → engaged
+│   ├── top_voices.md            # Tracked influencers + last-checked timestamps
+│   ├── network_growth.md        # Connection requests: pending → accepted/declined
 │   └── analytics/               # Weekly reports (dated JSON + markdown summary)
 │
 └── .github/
@@ -184,6 +184,10 @@ mcp-linkedin-server/
 | `search_linkedin_profiles` | Search for profiles by keyword |
 | `view_linkedin_profile` | View a profile by URL |
 | `interact_with_linkedin_post` | Like, comment, or share a post |
+| `search_linkedin_posts` | Search for LinkedIn posts by keyword |
+| `comment_on_approved_posts` | Post comments on a batch of approved posts |
+| `send_connection_request` | Send a connection request with optional personalised note |
+| `close_browser` | Close the persistent browser session |
 
 ---
 
@@ -288,7 +292,7 @@ Open GitHub Copilot Chat in VS Code and switch to **Agent mode**. You can then:
 
 - Type `/post-content` to draft and queue a LinkedIn post
 - Type `/trending-discover` to find and stage trending post engagement
-- Type `/trending-engage` after reviewing `data/trending_queue.json`
+- Type `/trending-engage` after reviewing `data/trending_queue.md`
 - Type `/grow-network` to run a connection request batch
 - Type `/weekly-analytics` to generate your weekly growth report
 
@@ -298,58 +302,54 @@ Or ask in natural language — the custom agents will pick up the right workflow
 
 ## Data Files
 
-All agent state lives in `data/` as JSON. You can open and edit these directly before any agent takes action.
+All agent state lives in `data/` as Markdown. You can open and edit these directly before any agent takes action.
 
-**`data/content_queue.json`** — posts at each stage of the pipeline:
+**`data/content_queue.md`** — posts at each stage of the pipeline:
 
-```json
-{
-  "posts": [
-    {
-      "id": "uuid",
-      "topic": "GitHub Copilot agent mode",
-      "body": "Full post text...",
-      "status": "draft",
-      "scheduled_for": "2026-04-29T08:00:00Z",
-      "posted_at": null
-    }
-  ]
-}
+```markdown
+## Post: Short topic title
+
+- [ ] Approved to post
+- **Scheduled:** 2026-04-28 09:00 UTC
+
+Full post body here, formatted as it will appear on LinkedIn.
+
+#Hashtag1 #Hashtag2
+
+---
 ```
 
-**`data/trending_queue.json`** — trending post engagement queue:
+**`data/trending_queue.md`** — trending post engagement queue:
 
-```json
-{
-  "posts": [
-    {
-      "id": "uuid",
-      "post_url": "https://www.linkedin.com/feed/update/...",
-      "author": "Name",
-      "drafted_comment": "...",
-      "status": "staged",
-      "discovered_at": "2026-04-25T10:00:00Z",
-      "engaged_at": null
-    }
-  ]
-}
+```markdown
+## tq-NNN · Author Name
+
+- [ ] Approve for engagement
+- **URL:** <https://www.linkedin.com/in/username/>
+- **Snippet:** First 200 chars of the post
+- **Drafted Comment:**
+  > Your drafted comment here
+
+---
 ```
 
-**`data/network_growth.json`** — connection request tracker:
+**`data/network_growth.md`** — connection request tracker:
 
-```json
-{
-  "weekly_cap": 100,
-  "requests": [
-    {
-      "profile_url": "https://www.linkedin.com/in/...",
-      "name": "Name",
-      "note": "Personalised note...",
-      "status": "pending",
-      "sent_at": "2026-04-25T09:00:00Z"
-    }
-  ]
-}
+```markdown
+# Network Growth
+
+Weekly cap: 100 | Sent this week: N
+
+---
+
+## [Person Name](<https://www.linkedin.com/in/username/>)
+
+- **Headline:** Their job title
+- **Note sent:** Personalised note text
+- **Sent at:** 2026-04-25 14:00 UTC
+- **Status:** pending | accepted | ignored
+
+---
 ```
 
 ---
@@ -360,7 +360,7 @@ All agent state lives in `data/` as JSON. You can open and edit these directly b
 2. **Rate limiting**: Randomised delays (10–60s) between actions. Max 100 connection requests/week. Max 50 actions/hour.
 3. **Session reuse**: Cookies are loaded from `sessions/` on every run. Login only happens when cookies are expired or missing.
 4. **Fail loudly**: If a session expires, a captcha appears, or LinkedIn returns an unexpected page — the tool reports the error clearly and stops. No silent retries.
-5. **Flat file storage**: All state in `data/` as JSON. No database. Human-readable and editable at any point.
+5. **Flat file storage**: All state in `data/` as Markdown. No database. Human-readable and editable at any point.
 
 ---
 
