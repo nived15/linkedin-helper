@@ -41,17 +41,8 @@ if env_path.exists():
 else:
     logger.warning(f"No .env file found at {env_path}")
 
-# Create MCP server with required dependencies
-mcp = FastMCP(
-    "linkedin",
-    dependencies=[
-        "playwright==1.40.0",
-        "python-dotenv>=0.19.0",
-        "cryptography>=35.0.0",
-        "httpx>=0.24.0"
-    ],
-    debug=True  # Enable debug mode for better error reporting
-)
+# Create MCP server
+mcp = FastMCP("linkedin")
 
 def report_progress(ctx, current, total, message=None):
     """Helper function to report progress with proper validation"""
