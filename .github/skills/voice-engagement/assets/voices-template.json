@@ -1,0 +1,124 @@
+{
+  "voices": [
+    {
+      "name": "Simon Willison",
+      "profile_url": "https://www.linkedin.com/in/simonwillison/",
+      "niche_tags": ["LLMs", "AI tools", "open source"],
+      "last_checked": null
+    },
+    {
+      "name": "Cassidy Williams",
+      "profile_url": "https://www.linkedin.com/in/cassidoo/",
+      "niche_tags": ["developer experience", "dev tools", "web dev"],
+      "last_checked": null
+    },
+    {
+      "name": "Swyx (Shawn Wang)",
+      "profile_url": "https://www.linkedin.com/in/syungg/",
+      "niche_tags": ["AI engineering", "LLMs", "developer tools"],
+      "last_checked": null
+    },
+    {
+      "name": "Chip Huyen",
+      "profile_url": "https://www.linkedin.com/in/chiphuyen/",
+      "niche_tags": ["MLOps", "AI infrastructure", "LLMs"],
+      "last_checked": null
+    },
+    {
+      "name": "Andrej Karpathy",
+      "profile_url": "https://www.linkedin.com/in/andrej-karpathy-9a650716/",
+      "niche_tags": ["deep learning", "AI", "LLMs"],
+      "last_checked": null
+    },
+    {
+      "name": "Harrison Chase",
+      "profile_url": "https://www.linkedin.com/in/harrison-chase-961287118/",
+      "niche_tags": ["LangChain", "AI agents", "LLMs"],
+      "last_checked": null
+    },
+    {
+      "name": "Lina Khan (AI policy context)",
+      "profile_url": "https://www.linkedin.com/in/laboringclass/",
+      "niche_tags": ["AI policy", "tech regulation"],
+      "last_checked": null
+    },
+    {
+      "name": "Fireship (Jeff Delaney)",
+      "profile_url": "https://www.linkedin.com/in/jeffdelaney23/",
+      "niche_tags": ["dev tools", "web dev", "AI"],
+      "last_checked": null
+    },
+    {
+      "name": "Tina Huang",
+      "profile_url": "https://www.linkedin.com/in/tina-seabrooke/",
+      "niche_tags": ["data science", "AI career", "developer productivity"],
+      "last_checked": null
+    },
+    {
+      "name": "Lex Fridman",
+      "profile_url": "https://www.linkedin.com/in/lexfridman/",
+      "niche_tags": ["AI", "deep learning", "tech interviews"],
+      "last_checked": null
+    },
+    {
+      "name": "Jim Fan",
+      "profile_url": "https://www.linkedin.com/in/drjimfan/",
+      "niche_tags": ["AI research", "embodied AI", "LLMs"],
+      "last_checked": null
+    },
+    {
+      "name": "Philipp Schmid",
+      "profile_url": "https://www.linkedin.com/in/philipp-schmid-a6a2bb196/",
+      "niche_tags": ["Hugging Face", "LLMs", "open source AI"],
+      "last_checked": null
+    },
+    {
+      "name": "Elvis Saravia",
+      "profile_url": "https://www.linkedin.com/in/oaborob/",
+      "niche_tags": ["prompt engineering", "NLP", "AI education"],
+      "last_checked": null
+    },
+    {
+      "name": "Lilian Weng",
+      "profile_url": "https://www.linkedin.com/in/lilianweng/",
+      "niche_tags": ["AI research", "LLMs", "OpenAI"],
+      "last_checked": null
+    },
+    {
+      "name": "Hamel Husain",
+      "profile_url": "https://www.linkedin.com/in/hamelhusain/",
+      "niche_tags": ["AI tools", "MLOps", "developer experience"],
+      "last_checked": null
+    },
+    {
+      "name": "Soumith Chintala",
+      "profile_url": "https://www.linkedin.com/in/soumith/",
+      "niche_tags": ["PyTorch", "AI infrastructure", "deep learning"],
+      "last_checked": null
+    },
+    {
+      "name": "Jason Liu",
+      "profile_url": "https://www.linkedin.com/in/jxnl/",
+      "niche_tags": ["AI engineering", "structured output", "LLMs"],
+      "last_checked": null
+    },
+    {
+      "name": "Sara Hooker",
+      "profile_url": "https://www.linkedin.com/in/sarahooker/",
+      "niche_tags": ["AI research", "model efficiency", "Cohere"],
+      "last_checked": null
+    },
+    {
+      "name": "Yann LeCun",
+      "profile_url": "https://www.linkedin.com/in/yann-lecun/",
+      "niche_tags": ["AI research", "deep learning", "Meta AI"],
+      "last_checked": null
+    },
+    {
+      "name": "Santiago Valdarrama",
+      "profile_url": "https://www.linkedin.com/in/svpino/",
+      "niche_tags": ["ML engineering", "AI education", "developer tools"],
+      "last_checked": null
+    }
+  ]
+}
