@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updatedAt": "2026-07-29T18:06:45.349Z",
+  "updatedAt": "2026-07-29T18:16:30.847Z",
   "tasks": {
     "CORE-01": {
       "status": "pending",
@@ -34,31 +34,37 @@
     },
     "DB-02": {
       "status": "pending",
-      "notes": ""
+      "notes": "",
+      "issueNumber": 12
     },
     "DB-03": {
       "status": "pending",
-      "notes": ""
+      "notes": "",
+      "issueNumber": 13
     },
     "DB-04": {
       "status": "pending",
-      "notes": ""
+      "notes": "",
+      "issueNumber": 14
     },
     "SCRAPE-01": {
       "status": "pending",
-      "notes": ""
+      "notes": "",
+      "issueNumber": 15
     },
     "SCRAPE-02": {
       "status": "deferred",
-      "notes": "Descoped by decision: free LinkedIn sources only, no paid subscriptions."
+      "notes": "Descoped by decision: free LinkedIn sources only, no paid subscriptions. Deliberately has no GitHub issue for this reason. File one if the decision is ever reversed."
     },
     "SCRAPE-03": {
       "status": "pending",
-      "notes": ""
+      "notes": "",
+      "issueNumber": 16
     },
     "SCRAPE-04": {
       "status": "pending",
-      "notes": ""
+      "notes": "",
+      "issueNumber": 17
     },
     "SEQ-01": {
       "status": "pending",
