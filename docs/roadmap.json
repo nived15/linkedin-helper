@@ -1,0 +1,130 @@
+{
+  "version": 1,
+  "updatedAt": "2026-07-29T17:38:15.115Z",
+  "tasks": {
+    "CORE-01": {
+      "status": "pending",
+      "notes": ""
+    },
+    "CORE-02": {
+      "status": "pending",
+      "notes": "Confirmed bug in linkedin_browser_mcp.py lines 129 vs 141."
+    },
+    "CORE-03": {
+      "status": "pending",
+      "notes": "Highest-priority item. Today limits exist only as English sentences in copilot-instructions.md."
+    },
+    "CORE-04": {
+      "status": "pending",
+      "notes": "random is currently imported and never used anywhere in the codebase."
+    },
+    "CORE-05": {
+      "status": "pending",
+      "notes": "Added from the codebase audit, not in the original brief."
+    },
+    "DB-01": {
+      "status": "pending",
+      "notes": "Blocks CORE-03. Do this first."
+    },
+    "DB-02": {
+      "status": "pending",
+      "notes": ""
+    },
+    "DB-03": {
+      "status": "pending",
+      "notes": ""
+    },
+    "DB-04": {
+      "status": "pending",
+      "notes": ""
+    },
+    "SCRAPE-01": {
+      "status": "pending",
+      "notes": ""
+    },
+    "SCRAPE-02": {
+      "status": "deferred",
+      "notes": "Descoped by decision: free LinkedIn sources only, no paid subscriptions."
+    },
+    "SCRAPE-03": {
+      "status": "pending",
+      "notes": ""
+    },
+    "SCRAPE-04": {
+      "status": "pending",
+      "notes": ""
+    },
+    "SEQ-01": {
+      "status": "pending",
+      "notes": ""
+    },
+    "SEQ-02": {
+      "status": "pending",
+      "notes": ""
+    },
+    "SEQ-03": {
+      "status": "pending",
+      "notes": "Directly satisfies VAL-02."
+    },
+    "SEQ-04": {
+      "status": "pending",
+      "notes": ""
+    },
+    "SEQ-05": {
+      "status": "pending",
+      "notes": "Added from the benchmark analysis. ICP filtering costs zero LinkedIn actions and protects scarce daily invites."
+    },
+    "MCP-01": {
+      "status": "pending",
+      "notes": ""
+    },
+    "MCP-02": {
+      "status": "pending",
+      "notes": "harvest_sales_nav intentionally omitted, see SCRAPE-02."
+    },
+    "MCP-03": {
+      "status": "pending",
+      "notes": "Deliberate design choice: enqueue, never execute inline."
+    },
+    "MCP-04": {
+      "status": "pending",
+      "notes": "Directly satisfies VAL-03."
+    },
+    "MCP-05": {
+      "status": "pending",
+      "notes": ""
+    }
+  },
+  "constraints": {
+    "REQ-01": {
+      "status": "pending"
+    },
+    "REQ-02": {
+      "status": "pending"
+    },
+    "REQ-03": {
+      "status": "pending"
+    },
+    "REQ-04": {
+      "status": "pending"
+    }
+  },
+  "validations": {
+    "VAL-01": {
+      "status": "pending",
+      "result": ""
+    },
+    "VAL-02": {
+      "status": "pending",
+      "result": ""
+    },
+    "VAL-03": {
+      "status": "pending",
+      "result": ""
+    },
+    "VAL-04": {
+      "status": "pending",
+      "result": ""
+    }
+  }
+}
