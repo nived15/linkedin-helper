@@ -221,7 +221,7 @@ CRUD and control over campaigns, leads, drafts, limits, and the worker. They tou
 
 ## 3.3 Autonomous Execution vs LLM Control
 
-````
+```
 Copilot / any MCP client
         │  stdio
 ┌───────▼────────────┐        ┌──────────────────────┐
@@ -632,4 +632,63 @@ Then modify:
 - **Credential handling.** Password in `.env` plus an encryption key beside the ciphertext is weak. Recommend dropping stored passwords entirely in favour of an interactive `session_login` writing to a persistent browser profile, so only the session survives, not the password.
 - **Scope creep.** The action catalogue is 25+ items. Phase 3 should ship 10. Endorse, follow, boost post, group invites, and event invites can follow once the engine is proven.
 - **Existing workflows must not regress.** The five agents and skills are working today. Phase 1 keeps the current 11 tools functional; Phase 4 migrates them. Nived should never have a window where he cannot post or engage.
-````
+
+---
+
+# Execution Tracking
+
+The plan above is the approved design. Live execution state lives in two places
+that stay in sync automatically:
+
+- **Roadmap canvas** — `docs/roadmap.json`, rendered by the `roadmap` canvas
+  extension. Source of truth for task status.
+- **GitHub issues** — one issue per task, one PR per task. When a PR containing
+  `Closes #N` merges, `.github/workflows/roadmap-sync.yml` marks the matching
+  task done on the board and stamps the PR number.
+
+## Issue map
+
+| Phase | Task | Issue | Status |
+| --- | --- | --- | --- |
+| P1 | DB-01 Schema for Accounts, Campaigns, Leads, Workflows, ActionLogs | #4 | pending |
+| P1 | CORE-01 Browser driver wrapper with stealth | #5 | pending |
+| P1 | CORE-02 Cookie, session and proxy management | #6 | pending |
+| P1 | CORE-03 Rate limiter enforcing hard caps | #7 | pending |
+| P1 | CORE-04 Action delay simulator | #8 | pending |
+| P1 | CORE-05 Challenge detection with auto-halt | #9 | pending |
+| P2 | DB-02 Lead storage with tagging and blacklist | #12 | pending |
+| P2 | DB-03 Lead deduplication engine | #13 | pending |
+| P2 | DB-04 Audit logging service | #14 | pending |
+| P2 | SCRAPE-01 Standard search extractor | #15 | pending |
+| P2 | SCRAPE-02 Sales Navigator scraper | none | deferred |
+| P2 | SCRAPE-03 Profile deep-scraper | #16 | pending |
+| P2 | SCRAPE-04 Event attendees and post engagers | #17 | pending |
+
+SCRAPE-02 has no issue on purpose. It needs a paid Sales Navigator
+subscription and was descoped in favour of free LinkedIn sources. File one if
+that decision is reversed.
+
+## Tracking infrastructure
+
+Built and merged in PR #11:
+
+- `linkTask()` in `store.mjs` persists `issueNumber`, `prNumber` and `prMerged`
+  per task.
+- `link_task` canvas action attaches an issue or PR to a task.
+- Task cards render clickable issue and PR badges.
+- `scripts/roadmap-sync.mjs` parses `Closes/Fixes/Resolves #N` from a merged
+  PR body, finds the task carrying that issue number, and marks it done.
+- `fs.watch` on `docs/roadmap.json` refreshes an open canvas panel the moment
+  the file changes on disk. Note this reacts to local disk changes only; a
+  `git pull` is still needed to bring the bot commit down from the remote.
+- `.github/PULL_REQUEST_TEMPLATE.md` requires a Task ID and a `Closes #N` line.
+
+Validated in live CI when PR #11 merged: the workflow parsed `Closes #10`,
+correctly found no roadmap task carrying that issue number, and no-op'd
+without committing.
+
+## Next up
+
+Phase 1 is fully filed and unblocked at DB-01 (#4), which blocks CORE-03, the
+single highest-priority item in the plan. Phase 3 (SEQ-01 to SEQ-04) and
+Phase 4 (MCP-01 to MCP-05) issues are not filed yet.
