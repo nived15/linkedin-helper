@@ -663,8 +663,19 @@ that stay in sync automatically:
 | P2 | SCRAPE-02 Sales Navigator scraper | none | deferred |
 | P2 | SCRAPE-03 Profile deep-scraper | #16 | pending |
 | P2 | SCRAPE-04 Event attendees and post engagers | #17 | pending |
+| P3 | SEQ-01 State machine for multi-step sequences | #19 | pending |
+| P3 | SEQ-02 Dynamic messaging template engine | #20 | pending |
+| P3 | SEQ-03 Inbox scanner and reply detection | #21 | pending |
+| P3 | SEQ-04 Scheduled background runner | #22 | pending |
+| P3 | SEQ-05 AI drafts queue and ICP gate | #23 | pending |
+| P4 | MCP-01 Campaign control tools | #24 | pending |
+| P4 | MCP-02 Lead extraction tools | #25 | pending |
+| P4 | MCP-03 Sequence execution tools | #26 | pending |
+| P4 | MCP-04 MCP Resources | #27 | pending |
+| P4 | MCP-05 MCP Prompts | #28 | pending |
 
-SCRAPE-02 has no issue on purpose. It needs a paid Sales Navigator
+All 22 active tasks across all four phases now have an issue. SCRAPE-02 is the
+only task without one, deliberately: it needs a paid Sales Navigator
 subscription and was descoped in favour of free LinkedIn sources. File one if
 that decision is reversed.
 
@@ -689,6 +700,29 @@ without committing.
 
 ## Next up
 
-Phase 1 is fully filed and unblocked at DB-01 (#4), which blocks CORE-03, the
-single highest-priority item in the plan. Phase 3 (SEQ-01 to SEQ-04) and
-Phase 4 (MCP-01 to MCP-05) issues are not filed yet.
+Every task on the board is filed and linked, so tracking is no longer the
+bottleneck. Only two tasks are unblocked right now: DB-01 (#4) and CORE-01 (#5).
+
+Dependency fan-out, computed from the board rather than estimated:
+
+| Task | Issue | Transitively blocks |
+| --- | --- | --- |
+| DB-01 | #4 | 17 of 22 tasks |
+| DB-02 | #12 | 14 |
+| CORE-03 | #7 | 9 |
+| CORE-01 | #5 | 7 |
+| SEQ-01 | #19 | 7 |
+| SEQ-04 | #22 | 4 |
+
+Recommended first PR: **DB-01**. It blocks 17 of the 22 active tasks, and
+nothing else can be built correctly against a schema that does not exist yet.
+CORE-01 is the only other task that can start in parallel today.
+
+Longest chain on the board, 7 tasks and 6 dependency hops:
+
+    DB-01 (#4) -> DB-02 (#12) -> SEQ-01 (#19) -> SEQ-04 (#22) -> MCP-01 (#24) -> MCP-04 (#27) -> MCP-05 (#28)
+
+Note the shape of the graph: Phase 4 is almost entirely downstream of SEQ-04
+(#22), the worker daemon. Nothing in the MCP layer can be finished until the
+execution plane runs unattended, so SEQ-04 is the real gate on shipping, not
+the MCP tasks themselves.
