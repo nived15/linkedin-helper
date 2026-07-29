@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updatedAt": "2026-07-29T18:16:30.847Z",
+  "updatedAt": "2026-07-29T18:25:07.012Z",
   "tasks": {
     "CORE-01": {
       "status": "pending",
@@ -68,43 +68,53 @@
     },
     "SEQ-01": {
       "status": "pending",
-      "notes": ""
+      "notes": "",
+      "issueNumber": 19
     },
     "SEQ-02": {
       "status": "pending",
-      "notes": ""
+      "notes": "",
+      "issueNumber": 20
     },
     "SEQ-03": {
       "status": "pending",
-      "notes": "Directly satisfies VAL-02."
+      "notes": "Directly satisfies VAL-02.",
+      "issueNumber": 21
     },
     "SEQ-04": {
       "status": "pending",
-      "notes": ""
+      "notes": "",
+      "issueNumber": 22
     },
     "SEQ-05": {
       "status": "pending",
-      "notes": "Added from the benchmark analysis. ICP filtering costs zero LinkedIn actions and protects scarce daily invites."
+      "notes": "Added from the benchmark analysis. ICP filtering costs zero LinkedIn actions and protects scarce daily invites.",
+      "issueNumber": 23
     },
     "MCP-01": {
       "status": "pending",
-      "notes": ""
+      "notes": "",
+      "issueNumber": 24
     },
     "MCP-02": {
       "status": "pending",
-      "notes": "harvest_sales_nav intentionally omitted, see SCRAPE-02."
+      "notes": "harvest_sales_nav intentionally omitted, see SCRAPE-02.",
+      "issueNumber": 25
     },
     "MCP-03": {
       "status": "pending",
-      "notes": "Deliberate design choice: enqueue, never execute inline."
+      "notes": "Deliberate design choice: enqueue, never execute inline.",
+      "issueNumber": 26
     },
     "MCP-04": {
       "status": "pending",
-      "notes": "Directly satisfies VAL-03."
+      "notes": "Directly satisfies VAL-03.",
+      "issueNumber": 27
     },
     "MCP-05": {
       "status": "pending",
-      "notes": ""
+      "notes": "",
+      "issueNumber": 28
     }
   },
   "constraints": {
