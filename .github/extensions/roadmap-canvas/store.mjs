@@ -79,6 +79,9 @@ export async function getState() {
             const o = overlay.tasks[t.id];
             if (o?.status) t.status = o.status;
             if (typeof o?.notes === "string") t.notes = o.notes;
+            if (o?.issueNumber != null) t.issueNumber = o.issueNumber;
+            if (o?.prNumber != null) t.prNumber = o.prNumber;
+            if (typeof o?.prMerged === "boolean") t.prMerged = o.prMerged;
         }
     }
     for (const v of state.validations) {
@@ -131,6 +134,34 @@ export async function setTaskStatus(taskId, status, notes) {
     const after = await getState();
     const updated = findTask(after, task.id);
     return { task: updated, warnings: status === "in-progress" || status === "done" ? unmetDeps(after, updated) : [] };
+}
+
+/**
+ * Link a task to its tracking issue and/or PR. Every roadmap task should have
+ * exactly one GitHub issue (opened when work starts) and one PR (opened when
+ * work is ready for review). This is how the two stay associated with the
+ * task ID so the roadmap-sync workflow can find its way back from a merged
+ * PR to a task to flip to "done".
+ *
+ * Any of the three fields may be omitted; only the fields present are
+ * updated, so `linkTaskIssue` and `linkTaskPr` can be called independently as
+ * each artifact is created.
+ */
+export async function linkTask(taskId, { issueNumber, prNumber, prMerged } = {}) {
+    const state = await getState();
+    const task = findTask(state, taskId);
+    if (!task) throw new Error(`Unknown task id "${taskId}"`);
+
+    await mutate((overlay) => {
+        const entry = overlay.tasks[task.id] ?? {};
+        if (issueNumber != null) entry.issueNumber = Number(issueNumber);
+        if (prNumber != null) entry.prNumber = Number(prNumber);
+        if (typeof prMerged === "boolean") entry.prMerged = prMerged;
+        overlay.tasks[task.id] = entry;
+    });
+
+    const after = await getState();
+    return findTask(after, task.id);
 }
 
 export async function setConstraintStatus(id, status) {

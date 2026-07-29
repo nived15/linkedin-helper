@@ -92,6 +92,9 @@ export function renderHtml() {
   .pill.audit { border-color: var(--true-color-blue-muted, #54aeff); color: var(--true-color-blue, #0969da); }
   .pill.dep-open { border-color: var(--true-color-red-muted, #ff8182); color: var(--true-color-red, #cf222e); }
   .pill.dep-ok { border-color: var(--true-color-green, #1a7f37); color: var(--true-color-green, #1a7f37); }
+  .pill.link { text-decoration: none; cursor: pointer; }
+  .pill.link:hover { border-color: var(--true-color-blue, #0969da); color: var(--true-color-blue, #0969da); }
+  .pill.link.pr-merged { border-color: var(--true-color-green, #1a7f37); color: var(--true-color-green, #1a7f37); }
 
   select, textarea, button.act {
     font: inherit; color: inherit;
@@ -322,11 +325,21 @@ export function renderHtml() {
     }
     var refs = (t.planRefs || []).length ? '<span class="pill">plan: ' + esc(t.planRefs.join(", ")) + "</span>" : "";
     var origin = t.origin === "audit" ? '<span class="pill audit">Added from audit</span>' : "";
+    var repo = (state && state.repo) || "";
+    var trackPills = "";
+    if (t.issueNumber) {
+      trackPills += '<a class="pill link" target="_blank" rel="noopener" href="https://github.com/' + esc(repo) +
+        "/issues/" + t.issueNumber + '">Issue #' + t.issueNumber + "</a>";
+    }
+    if (t.prNumber) {
+      trackPills += '<a class="pill link ' + (t.prMerged ? "pr-merged" : "") + '" target="_blank" rel="noopener" href="https://github.com/' +
+        esc(repo) + "/pull/" + t.prNumber + '">PR #' + t.prNumber + (t.prMerged ? " merged" : "") + "</a>";
+    }
     return '<div class="card ' + cls(t.status) + '" id="card-' + esc(t.id) + '">' +
       '<div class="card-head"><span class="id">' + esc(t.id) + '</span><span class="t">' + esc(t.title) + "</span>" +
       selectHtml("task", t.id, t.status) + "</div>" +
       '<p class="desc">' + esc(t.description) + "</p>" +
-      '<div class="meta"><span class="pill">' + esc(t.phase) + "</span>" + depPill + origin + refs +
+      '<div class="meta"><span class="pill">' + esc(t.phase) + "</span>" + depPill + origin + refs + trackPills +
       '<button class="act" data-notes="' + esc(t.id) + '">' + (t.notes ? "Notes \\u2713" : "Add note") + "</button></div>" +
       '<div class="notes-row' + (t.notes ? " open" : "") + '" data-notes-for="' + esc(t.id) + '">' +
       '<textarea data-note-input="' + esc(t.id) + '" placeholder="Implementation notes, blockers, decisions...">' + esc(t.notes || "") + "</textarea>" +

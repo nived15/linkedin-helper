@@ -11,6 +11,7 @@
 // and fresh panels. Never console.log here: stdout is JSON-RPC.
 
 import { createServer } from "node:http";
+import { watch } from "node:fs";
 import { createCanvas, CanvasError, joinSession } from "@github/copilot-sdk/extension";
 
 import { renderHtml } from "./renderer.mjs";
@@ -22,6 +23,7 @@ import {
     setTaskStatus,
     setConstraintStatus,
     setValidationStatus,
+    linkTask,
     stateFilePath,
 } from "./store.mjs";
 import { diffTodos, pushToTodos, pullFromTodos, sessionDbPath } from "./todos.mjs";
@@ -149,6 +151,13 @@ async function handle(req, res) {
                     const current = findTask(await getState(), body.id);
                     if (!current) throw new Error(`Unknown task id "${body.id}"`);
                     await setTaskStatus(body.id, current.status, body.notes);
+                }
+                if (body.issueNumber != null || body.prNumber != null || typeof body.prMerged === "boolean") {
+                    await linkTask(body.id, {
+                        issueNumber: body.issueNumber,
+                        prNumber: body.prNumber,
+                        prMerged: body.prMerged,
+                    });
                 }
                 autoPush(await getState());
             } else if (route === "/api/constraint") {
@@ -337,6 +346,36 @@ const canvas = createCanvas({
             },
         },
         {
+            name: "link_task",
+            description:
+                "Attach the GitHub issue and/or PR number that track a work item, so the board and GitHub stay associated. Call again with a prNumber once the PR opens, and with prMerged true once it merges.",
+            inputSchema: {
+                type: "object",
+                properties: {
+                    id: { type: "string", description: "Task ID, for example CORE-03." },
+                    issueNumber: { type: "integer", description: "GitHub issue number tracking this task." },
+                    prNumber: { type: "integer", description: "GitHub PR number implementing this task." },
+                    prMerged: { type: "boolean", description: "Set true once the PR has merged." },
+                },
+                required: ["id"],
+                additionalProperties: false,
+            },
+            handler: async (ctx) => {
+                let task;
+                try {
+                    task = await linkTask(ctx.input.id, {
+                        issueNumber: ctx.input.issueNumber,
+                        prNumber: ctx.input.prNumber,
+                        prMerged: ctx.input.prMerged,
+                    });
+                } catch (err) {
+                    throw new CanvasError("task_link_failed", String(err?.message ?? err));
+                }
+                broadcast();
+                return { id: task.id, issueNumber: task.issueNumber, prNumber: task.prNumber, prMerged: task.prMerged };
+            },
+        },
+        {
             name: "sync_todos",
             description:
                 "Reconcile the board with the session todos table. Use report to see drift, push to make the board win, pull to roll todo progress up into the board. Push is monotonic unless force is set.",
@@ -473,6 +512,30 @@ const canvas = createCanvas({
     },
 });
 
+/**
+ * Watch docs/roadmap.json for external changes, for example a `git pull` that
+ * brings in the roadmap-sync workflow's bot commit after a tracked PR merges.
+ * Any already-open canvas panel then refreshes over the existing SSE channel
+ * without the user needing to reopen or reload it. This does not pull remote
+ * commits into the worktree by itself; it only reacts once the file has
+ * already changed on disk by whatever means (manual git pull, external edit).
+ */
+function watchStateFile() {
+    let debounce = null;
+    try {
+        watch(stateFilePath, { persistent: false }, () => {
+            clearTimeout(debounce);
+            debounce = setTimeout(() => broadcast(), 150);
+        });
+    } catch (err) {
+        // File may not exist yet on a fresh checkout; that's fine, the first
+        // write from this process will create it and future edits are still
+        // covered by the explicit broadcast() calls after each API mutation.
+        log(`roadmap state file watch unavailable: ${err?.message ?? err}`, "warn");
+    }
+}
+
 session = await joinSession({ canvases: [canvas] });
 sessionId = session.sessionId ?? sessionId;
+watchStateFile();
 log(`roadmap canvas ready, state file ${stateFilePath}, todos db ${sessionDbPath(sessionId) ?? "unavailable"}`);
