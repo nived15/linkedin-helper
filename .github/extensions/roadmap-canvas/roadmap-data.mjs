@@ -435,6 +435,48 @@ export const VALIDATIONS = [
     },
 ];
 
+/**
+ * Board task -> session todo IDs.
+ *
+ * The session `todos` table is finer-grained than the board (28 todos across 23
+ * board tasks), so this is deliberately many-to-many. A todo may appear under
+ * more than one task when it genuinely delivers both, for example p1-browser
+ * covers the driver wrapper and the per-account persistent context.
+ *
+ * Rollup rules are defined in todos.mjs:
+ *   push (board wins): a todo takes the least advanced status of every task
+ *                      that claims it, so it is only done when all of them are.
+ *   pull (todos win):  a task is done only when all its todos are done.
+ *
+ * SCRAPE-02 maps to nothing on purpose. Sales Navigator was descoped, so it
+ * never got a todo.
+ */
+export const TASK_TODOS = {
+    "CORE-01": ["p1-browser"],
+    "CORE-02": ["p1-browser"],
+    "CORE-03": ["p1-config", "p1-gate", "p1-limits", "p1-migrate-tools", "p1-tests", "p1-docs"],
+    "CORE-04": ["p1-humanize"],
+    "CORE-05": ["p1-detect"],
+    "DB-01": ["p1-db", "p1-schema"],
+    "DB-02": ["p2-crm", "p1-render"],
+    "DB-03": ["p2-extract"],
+    "DB-04": ["p1-schema"],
+    "SCRAPE-01": ["p2-harvest"],
+    "SCRAPE-02": [],
+    "SCRAPE-03": ["p2-extract"],
+    "SCRAPE-04": ["p2-harvest"],
+    "SEQ-01": ["p3-engine", "p3-actions"],
+    "SEQ-02": ["p3-templates"],
+    "SEQ-03": ["p3-replies"],
+    "SEQ-04": ["p3-worker"],
+    "SEQ-05": ["p3-drafts", "p3-icp"],
+    "MCP-01": ["p3-campaign-tools"],
+    "MCP-02": ["p2-harvest"],
+    "MCP-03": ["p3-actions", "p4-inbox"],
+    "MCP-04": ["p4-resources", "p4-analytics", "p4-webhooks"],
+    "MCP-05": ["p4-migrate-agents", "p4-resources"],
+};
+
 export function seedState() {
     return {
         version: 1,

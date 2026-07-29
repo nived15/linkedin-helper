@@ -130,6 +130,18 @@ export function renderHtml() {
   .legend i { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 4px; vertical-align: middle; }
   .foot { margin-top: 26px; padding-top: 12px; border-top: 1px solid var(--border-color-default, #d1d9e0); font-size: 11px; color: var(--text-color-muted, #59636e); }
   .empty { color: var(--text-color-muted, #59636e); font-size: 12px; font-style: italic; }
+
+  /* ---- todo sync ---- */
+  .sync { border: 1px solid var(--border-color-default, #d1d9e0); border-radius: 9px; padding: 10px 12px; margin-top: 12px; }
+  .sync.drift { border-color: var(--true-color-blue-muted, #54aeff); }
+  .sync-head { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
+  .sync-head .t { font-weight: var(--font-weight-semibold, 600); flex: 1; }
+  .sync ul { margin: 8px 0 0; padding-left: 18px; font-size: 12px; color: var(--text-color-muted, #59636e); }
+  .sync li { margin: 2px 0; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex: none; }
+  .dot.ok { background: var(--true-color-green, #1a7f37); }
+  .dot.drift { background: var(--true-color-blue, #0969da); }
+  .dot.off { background: var(--border-color-default, #d1d9e0); }
 </style>
 </head>
 <body>
@@ -167,7 +179,7 @@ export function renderHtml() {
 (function () {
   var STATUSES = ["pending", "in-progress", "done", "blocked", "deferred"];
   var LABELS = { "pending": "Pending", "in-progress": "In progress", "done": "Done", "blocked": "Blocked", "deferred": "Deferred" };
-  var state = null, summary = null, tab = "overview", highlight = null;
+  var state = null, summary = null, sync = null, tab = "overview", highlight = null;
 
   function esc(s) {
     return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
@@ -226,6 +238,43 @@ export function renderHtml() {
       "State: docs/roadmap.json" + (state.updatedAt ? " \\u00b7 last updated " + new Date(state.updatedAt).toLocaleString() : " \\u00b7 not yet written");
   }
 
+  function syncPanel() {
+    if (!sync || !sync.available) {
+      return '<div class="sync"><div class="sync-head"><span class="dot off"></span>' +
+        '<span class="t">Session todos</span><span class="pill">Not connected</span></div>' +
+        '<ul><li>' + esc((sync && sync.reason) || "The session todos database is not reachable from here.") + "</li></ul></div>";
+    }
+    var push = sync.pushChanges || [], pull = sync.pullChanges || [];
+    var drift = push.length + pull.length;
+    var h = '<div class="sync' + (drift ? " drift" : "") + '"><div class="sync-head">' +
+      '<span class="dot ' + (drift ? "drift" : "ok") + '"></span>' +
+      '<span class="t">Session todos</span>' +
+      '<span class="pill">' + sync.todoCount + " tracked</span>" +
+      (drift ? '<span class="pill dep-open">' + drift + " out of step</span>" : '<span class="pill dep-ok">In sync</span>') +
+      '<button class="act" data-sync="push">Push board &rarr; todos</button>' +
+      '<button class="act" data-sync="pull">Pull todos &rarr; board</button></div>';
+    if (push.length) {
+      h += "<ul>" + push.slice(0, 8).map(function (c) {
+        return "<li>" + esc(c.todoId) + ": " + esc(c.from) + " &rarr; " + esc(c.to) + " (from " + esc(c.drivenBy.join(", ")) + ")</li>";
+      }).join("") + (push.length > 8 ? "<li>and " + (push.length - 8) + " more</li>" : "") + "</ul>";
+    }
+    if (pull.length) {
+      h += "<ul>" + pull.slice(0, 8).map(function (c) {
+        return "<li>" + esc(c.taskId) + " would become " + esc(c.to) + " (from " + esc(c.drivenBy.join(", ")) + ")</li>";
+      }).join("") + (pull.length > 8 ? "<li>and " + (pull.length - 8) + " more</li>" : "") + "</ul>";
+    }
+    var ahead = sync.pushDemotions || [];
+    if (ahead.length) {
+      h += "<ul><li>Ahead of the board, left untouched by push: " +
+        esc(ahead.map(function (c) { return c.todoId + " (" + c.from + ")"; }).join(", ")) +
+        ". Pull to roll these up.</li></ul>";
+    }
+    if (sync.unmappedTasks && sync.unmappedTasks.length) {
+      h += '<ul><li>Not tracked by any todo: ' + esc(sync.unmappedTasks.join(", ")) + "</li></ul>";
+    }
+    return h + "</div>";
+  }
+
   function renderOverview() {
     var h = "<h2>Section 1 &middot; System requirements &amp; safety constraints</h2>" +
       '<p class="sub">Non-negotiable. Each one needs a concrete artefact in the repo before it counts as met.</p>';
@@ -255,6 +304,10 @@ export function renderHtml() {
         '<i class="b-prog" style="width:' + (m.total ? m.inProgress / m.total * 100 : 0) + '%"></i>' +
         '<i class="b-block" style="width:' + (m.total ? m.blocked / m.total * 100 : 0) + '%"></i></div></div>';
     }).join("");
+
+    h += "<h2>Todo table sync</h2>" +
+      '<p class="sub">The session todo list is finer-grained than this board. Board edits push down automatically; pull rolls todo progress back up.</p>' +
+      syncPanel();
     document.getElementById("p-overview").innerHTML = h;
   }
 
@@ -366,7 +419,7 @@ export function renderHtml() {
   async function load() {
     var r = await fetch("/api/state");
     var d = await r.json();
-    state = d.state; summary = d.summary;
+    state = d.state; summary = d.summary; sync = d.sync || null;
     renderAll(); showTab(tab);
   }
 
@@ -392,6 +445,14 @@ export function renderHtml() {
     if (toggle) {
       var row = document.querySelector('[data-notes-for="' + toggle.dataset.notes + '"]');
       if (row) row.classList.toggle("open");
+      return;
+    }
+
+    var syncBtn = e.target.closest("[data-sync]");
+    if (syncBtn) {
+      syncBtn.disabled = true;
+      syncBtn.textContent = "Syncing...";
+      post("/api/sync", { direction: syncBtn.dataset.sync });
       return;
     }
 

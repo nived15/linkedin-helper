@@ -24,6 +24,7 @@ import {
     setValidationStatus,
     stateFilePath,
 } from "./store.mjs";
+import { diffTodos, pushToTodos, pullFromTodos, sessionDbPath } from "./todos.mjs";
 
 /** instanceId -> { server, url } */
 const servers = new Map();
@@ -31,12 +32,31 @@ const servers = new Map();
 const sseClients = new Set();
 
 let session;
+/** Needed by HTTP handlers, which have no canvas ctx. */
+let sessionId = process.env.SESSION_ID ?? null;
 
 function log(message, level = "info") {
     try {
         session?.log?.(message, { level, ephemeral: true });
     } catch {
         /* logging must never break a request */
+    }
+}
+
+/**
+ * Keep the session todos table in step with the board after every board edit.
+ * Best-effort by design: the CLI owns that database, so a lock or a schema
+ * change must never take the canvas down.
+ */
+function autoPush(state) {
+    if (!sessionId) return null;
+    try {
+        const result = pushToTodos(sessionId, state);
+        if (result.applied) log(`roadmap canvas synced ${result.applied} todo(s)`);
+        return result;
+    } catch (err) {
+        log(`todo sync skipped: ${err?.message ?? err}`, "warn");
+        return null;
     }
 }
 
@@ -110,7 +130,13 @@ async function handle(req, res) {
 
     if (route === "/api/state" && req.method === "GET") {
         const state = await getState();
-        sendJson(res, 200, { state, summary: summarise(state) });
+        let sync = { available: false };
+        try {
+            sync = diffTodos(sessionId, state);
+        } catch (err) {
+            sync = { available: false, reason: String(err?.message ?? err) };
+        }
+        sendJson(res, 200, { state, summary: summarise(state), sync });
         return;
     }
 
@@ -124,6 +150,7 @@ async function handle(req, res) {
                     if (!current) throw new Error(`Unknown task id "${body.id}"`);
                     await setTaskStatus(body.id, current.status, body.notes);
                 }
+                autoPush(await getState());
             } else if (route === "/api/constraint") {
                 await setConstraintStatus(body.id, body.status);
             } else if (route === "/api/validation") {
@@ -131,6 +158,8 @@ async function handle(req, res) {
                 const match = state.validations.find((v) => v.id === body.id);
                 if (!match) throw new Error(`Unknown validation id "${body.id}"`);
                 await setValidationStatus(body.id, body.status ?? match.status, body.result);
+            } else if (route === "/api/sync") {
+                await runSync(body.direction ?? "push", { force: body.force === true });
             } else {
                 sendJson(res, 404, { error: "not_found" });
                 return;
@@ -141,11 +170,58 @@ async function handle(req, res) {
         }
         broadcast();
         const state = await getState();
-        sendJson(res, 200, { state, summary: summarise(state) });
+        let sync = { available: false };
+        try {
+            sync = diffTodos(sessionId, state);
+        } catch {
+            /* drift reporting is advisory */
+        }
+        sendJson(res, 200, { state, summary: summarise(state), sync });
         return;
     }
 
     sendJson(res, 404, { error: "not_found" });
+}
+
+/**
+ * Reconcile the board and the session todos table.
+ *   report - describe the drift, change nothing
+ *   push   - board wins, rewrite todo statuses
+ *   pull   - todos win, roll their finer-grained progress up into the board
+ */
+async function runSync(direction, { force = false } = {}) {
+    if (!["report", "push", "pull"].includes(direction)) {
+        throw new Error(`Invalid direction "${direction}". Expected report, push or pull.`);
+    }
+    if (!sessionId) {
+        return { available: false, direction, reason: "No session id available to locate the todos database." };
+    }
+
+    let state = await getState();
+
+    if (direction === "pull") {
+        const { available, updates } = pullFromTodos(sessionId, state);
+        if (!available) return { available: false, direction, reason: "Todos database not readable." };
+        for (const u of updates) await setTaskStatus(u.taskId, u.to);
+        state = await getState();
+        return { available: true, direction, applied: updates.length, changes: updates, drift: diffTodos(sessionId, state) };
+    }
+
+    if (direction === "push") {
+        const result = pushToTodos(sessionId, state, { force });
+        if (!result.available) return { available: false, direction, reason: "Todos database not writable." };
+        return {
+            available: true,
+            direction,
+            force,
+            applied: result.applied,
+            changes: result.changes,
+            keptAhead: result.skipped,
+            drift: diffTodos(sessionId, state),
+        };
+    }
+
+    return { available: true, direction: "report", ...diffTodos(sessionId, state) };
 }
 
 async function startServer() {
@@ -248,6 +324,7 @@ const canvas = createCanvas({
                 } catch (err) {
                     throw new CanvasError("task_update_failed", String(err?.message ?? err));
                 }
+                const sync = autoPush(await getState());
                 broadcast();
                 return {
                     id: result.task.id,
@@ -255,7 +332,36 @@ const canvas = createCanvas({
                     warning: result.warnings.length
                         ? `Dependencies not yet done: ${result.warnings.join(", ")}`
                         : undefined,
+                    syncedTodos: sync?.applied ? sync.changes.map((c) => `${c.todoId}:${c.to}`) : undefined,
                 };
+            },
+        },
+        {
+            name: "sync_todos",
+            description:
+                "Reconcile the board with the session todos table. Use report to see drift, push to make the board win, pull to roll todo progress up into the board. Push is monotonic unless force is set.",
+            inputSchema: {
+                type: "object",
+                properties: {
+                    direction: {
+                        type: "string",
+                        enum: ["report", "push", "pull"],
+                        description: "Defaults to report, which changes nothing.",
+                    },
+                    force: {
+                        type: "boolean",
+                        description:
+                            "Push only. Mirror the board exactly, including demoting todos that are further along than their board task.",
+                    },
+                },
+                additionalProperties: false,
+            },
+            handler: async (ctx) => {
+                try {
+                    return await runSync(ctx.input?.direction ?? "report", { force: ctx.input?.force === true });
+                } catch (err) {
+                    throw new CanvasError("todo_sync_failed", String(err?.message ?? err));
+                }
             },
         },
         {
@@ -345,6 +451,7 @@ const canvas = createCanvas({
         },
     ],
     open: async (ctx) => {
+        sessionId = ctx.sessionId ?? sessionId;
         let entry = servers.get(ctx.instanceId);
         if (!entry) {
             entry = await startServer();
@@ -367,4 +474,5 @@ const canvas = createCanvas({
 });
 
 session = await joinSession({ canvases: [canvas] });
-log(`roadmap canvas ready, state file ${stateFilePath}`);
+sessionId = session.sessionId ?? sessionId;
+log(`roadmap canvas ready, state file ${stateFilePath}, todos db ${sessionDbPath(sessionId) ?? "unavailable"}`);
