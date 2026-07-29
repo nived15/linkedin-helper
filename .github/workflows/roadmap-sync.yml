@@ -1,0 +1,50 @@
+name: Roadmap sync
+
+# Keeps docs/roadmap.json (the roadmap canvas's durable state) in step with
+# GitHub. When a PR that closes a tracked roadmap issue merges, this workflow
+# marks the matching task "done" and stamps its PR number, then commits the
+# change straight to the base branch. An already-open roadmap canvas panel
+# picks this up automatically after the next `git pull` (it watches the state
+# file on disk and refreshes live once it changes).
+
+on:
+  pull_request:
+    types: [closed]
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out base branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.ref }}
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Sync roadmap state from merged PR
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          PR_MERGED: "true"
+        run: node scripts/roadmap-sync.mjs
+
+      - name: Commit and push roadmap update
+        run: |
+          if git diff --quiet -- docs/roadmap.json; then
+            echo "No roadmap changes to commit."
+            exit 0
+          fi
+          git config user.name "roadmap-sync-bot"
+          git config user.email "roadmap-sync-bot@users.noreply.github.com"
+          git add docs/roadmap.json
+          git commit -m "chore(roadmap): sync task status from PR #${{ github.event.pull_request.number }}"
+          git push origin HEAD:${{ github.event.pull_request.base.ref }}
