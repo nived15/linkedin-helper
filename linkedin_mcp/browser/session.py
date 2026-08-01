@@ -79,9 +79,7 @@ def setup_sessions_directory() -> bool:
     """Set up the sessions directory with proper permissions."""
     try:
         SESSIONS_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
-        current_mode = SESSIONS_DIR.stat().st_mode & 0o777
-        if current_mode != 0o700:
-            os.chmod(SESSIONS_DIR, 0o700)
+        os.chmod(SESSIONS_DIR, 0o700)
         logger.debug("Sessions directory set up at %s with owner-only permissions", SESSIONS_DIR)
         return True
     except Exception as exc:
@@ -123,8 +121,8 @@ def session_cookie_path(platform: str) -> Path:
 
 def build_fingerprint_profile(platform: str, account_seed: str | None = None) -> FingerprintProfile:
     """Choose a stable fingerprint profile for the current account."""
-    raw_seed = account_seed or os.getenv(f"{platform.upper()}_USERNAME", "").strip() or platform
-    seed_bytes = hashlib.sha256(raw_seed.encode("utf-8")).digest()
+    seed_source = account_seed or os.getenv(f"{platform.upper()}_USERNAME", "").strip() or platform
+    seed_bytes = hashlib.sha256(seed_source.encode("utf-8")).digest()
     seeded_random = random.Random(int.from_bytes(seed_bytes[:8], "big"))
     return FINGERPRINT_CATALOG[seeded_random.randrange(len(FINGERPRINT_CATALOG))]
 
@@ -193,7 +191,7 @@ async def save_cookies(page, platform):
         }
 
         if not setup_sessions_directory():
-            raise Exception("Failed to set up sessions directory")
+            raise RuntimeError("Failed to set up sessions directory for cookie persistence")
 
         encrypted_data = Fernet(get_or_create_encryption_key()).encrypt(
             json.dumps(cookie_data).encode(),
@@ -204,7 +202,7 @@ async def save_cookies(page, platform):
             cookie_handle.write(encrypted_data)
         os.chmod(cookie_file, 0o600)
     except Exception as exc:
-        raise Exception(f"Failed to save cookies: {exc}")
+        raise RuntimeError(f"Failed to save cookies: {exc}") from exc
 
 
 async def load_cookies(context, platform):
@@ -248,7 +246,7 @@ class PlaywrightChromiumDriver:
 
     async def launch(self):
         if not setup_sessions_directory():
-            raise Exception("Failed to set up sessions directory")
+            raise RuntimeError("Failed to set up sessions directory for browser session")
 
         logger.info("Launching Chromium driver for %s", self.platform)
         self.playwright = await asyncio.wait_for(async_playwright().start(), timeout=30)

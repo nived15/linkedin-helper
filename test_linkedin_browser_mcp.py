@@ -154,8 +154,6 @@ def test_fingerprint_profile_is_stable_per_account():
     ]
 
     assert first == second
-    # Chrome/96.0.4664.110 was the previous hard-coded 2021-era fingerprint.
-    assert "Chrome/96.0.4664.110" not in first.user_agent
     assert first.user_agent in catalog_user_agents
     assert re.search(r"Chrome/\d{3}\.\d+\.\d+\.\d+", first.user_agent)
     assert int(re.search(r"Chrome/(\d+)\.", first.user_agent).group(1)) >= 120

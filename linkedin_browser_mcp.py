@@ -4,6 +4,7 @@ import logging
 import os
 import random
 import sys
+import time
 from pathlib import Path
 from urllib.parse import quote
 
@@ -66,10 +67,15 @@ def handle_notification(ctx, notification_type, params=None):
 
 async def wait_for_selector_fallback(page, name: str, timeout: int = 10000):
     """Wait for the first matching selector in the configured fallback order."""
+    fallbacks = selector_fallbacks(name)
+    deadline = time.monotonic() + (timeout / 1000)
     last_error = None
-    for fallback in selector_fallbacks(name):
+    for fallback in fallbacks:
+        remaining_ms = int((deadline - time.monotonic()) * 1000)
+        if remaining_ms <= 0:
+            break
         try:
-            return await page.wait_for_selector(fallback, timeout=timeout)
+            return await page.wait_for_selector(fallback, timeout=max(1, remaining_ms))
         except Exception as exc:
             last_error = exc
     if last_error:

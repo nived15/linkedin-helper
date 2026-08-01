@@ -141,8 +141,7 @@ SELECTORS: dict[str, tuple[str, ...]] = {
         "button.comments-comment-box__trigger",
         "button.comment-button",
         'button[aria-label*="Comment"]',
-        # Intentional partial match so one fallback catches both "Comment" and "comment".
-        'button[aria-label*="omment"]',
+        'button[aria-label*="comment"]',
     ),
     "post_comment_editor": (
         '.ql-editor[contenteditable="true"]',
