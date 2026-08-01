@@ -48,7 +48,7 @@ CREATE TABLE IF NOT EXISTS leads (
     organization_name TEXT,
     organization_title TEXT,
     location_name TEXT,
-    member_distance TEXT, -- LinkedIn connection degree (1st, 2nd, 3rd, etc.)
+    member_distance TEXT, -- LinkedIn connection degree (1st, 2nd, 3rd, and beyond)
     connection_count INTEGER,
     follower_count INTEGER,
     connected_at TEXT,
@@ -266,7 +266,7 @@ CREATE TABLE IF NOT EXISTS ai_drafts (
     kind TEXT NOT NULL CHECK (kind IN ('connection_note', 'message', 'comment', 'icp_evaluation')),
     context_json TEXT NOT NULL DEFAULT '{}',
     generated_text TEXT,
-    verdict_json TEXT, -- Holds {match, score, reason} for ICP evaluation rows.
+    verdict_json TEXT, -- Holds {match, score, reason} for Ideal Customer Profile evaluation rows.
     status TEXT NOT NULL CHECK (status IN ('needs_generation', 'pending_approval', 'approved', 'rejected', 'sent')),
     model TEXT,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,

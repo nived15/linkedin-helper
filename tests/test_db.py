@@ -6,7 +6,7 @@ from linkedin_mcp.core.db import MIGRATIONS_DIR, initialize_database, migrate
 
 EXPECTED_TABLES = set(
     re.findall(
-        r"CREATE TABLE IF NOT EXISTS ([a-z_]+)",
+        r"CREATE TABLE IF NOT EXISTS ([a-zA-Z0-9_]+)",
         (MIGRATIONS_DIR / "0001_init.sql").read_text(encoding="utf-8"),
     )
 )

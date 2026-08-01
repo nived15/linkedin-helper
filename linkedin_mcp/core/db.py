@@ -35,7 +35,7 @@ def ensure_schema_migrations_table(conn: sqlite3.Connection) -> None:
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS schema_migrations (
-            version TEXT PRIMARY KEY,
+            version TEXT PRIMARY KEY CHECK (length(version) > 0),
             applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         )
         """
