@@ -1,16 +1,20 @@
 {
   "version": 1,
-  "updatedAt": "2026-07-29T18:25:07.012Z",
+  "updatedAt": "2026-08-01T17:38:54.828Z",
   "tasks": {
     "CORE-01": {
-      "status": "pending",
-      "notes": "",
-      "issueNumber": 5
+      "status": "done",
+      "notes": "Verified 2026-08-01 on master. Chrome/96.0.4664.110 is gone; FINGERPRINT_CATALOG ships 3 modern profiles (Chrome 138/139) with locale, timezone_id, Accept-Language, languages and navigator.platform aligned per profile. build_fingerprint_profile seeds random.Random from sha256(account) so a fingerprint is deterministic per account and differs across accounts (alice=America/New_York vs bob=Europe/London). Stealth init script patches navigator.webdriver to undefined plus language/languages/platform/plugins/window.chrome. All LinkedIn CSS selectors centralised in linkedin_mcp/browser/selectors.py with ordered fallbacks and consumed by linkedin_browser_mcp.py. 3 dedicated tests pass, including a regression test asserting selectors stay centralised.",
+      "issueNumber": 5,
+      "prNumber": 31,
+      "prMerged": true
     },
     "CORE-02": {
-      "status": "pending",
-      "notes": "Confirmed bug in linkedin_browser_mcp.py lines 129 vs 141.",
-      "issueNumber": 6
+      "status": "done",
+      "notes": "Verified 2026-08-01 on master. Now uses chromium.launch_persistent_context against a per-account profile dir (sessions/<platform>_<sha256[:12]>_profile), so localStorage and IndexedDB persist, not just cookies. THE PATH BUG IS FIXED: save_cookies and load_cookies both resolve through session_cookie_path(), anchored to REPO_ROOT via Path(__file__).resolve().parents[2]. Smoke test confirms the path is identical and absolute before and after chdir to a temp dir, so the destructive unlink-on-load-failure path can no longer trigger from a different cwd. Legacy encrypted cookies are imported once when the profile dir is empty. Per-account proxy binding resolves in order explicit arg > LINKEDIN_PROXY_<ACCOUNT> > LINKEDIN_PROXY, confirmed by smoke test. Profile dirs and cookie files chmod 0o700/0o600. tests/test_session.py 2/2 pass.",
+      "issueNumber": 6,
+      "prNumber": 32,
+      "prMerged": true
     },
     "CORE-03": {
       "status": "pending",
@@ -28,9 +32,11 @@
       "issueNumber": 9
     },
     "DB-01": {
-      "status": "pending",
-      "notes": "Blocks CORE-03. Do this first.",
-      "issueNumber": 4
+      "status": "done",
+      "notes": "Verified 2026-08-01 on master (merge point c97aab5). linkedin_mcp/core/migrations/0001_init.sql creates all 25 spec tables; schema_migrations is created by the runner, giving 26 total. Smoke test run from a non-repo cwd: journal_mode=wal, foreign_keys=1, 26 tables, applied=['0001_init'], re-run applied [] so migrations are forward-only and idempotent. Runner splits statements via sqlite3.complete_statement and rolls the whole migration back on failure. tests/test_db.py 2/2 pass.",
+      "issueNumber": 4,
+      "prNumber": 30,
+      "prMerged": true
     },
     "DB-02": {
       "status": "pending",
@@ -128,7 +134,7 @@
       "status": "pending"
     },
     "REQ-04": {
-      "status": "pending"
+      "status": "in-progress"
     }
   },
   "validations": {
@@ -145,8 +151,8 @@
       "result": ""
     },
     "VAL-04": {
-      "status": "pending",
-      "result": ""
+      "status": "in-progress",
+      "result": "PARTIAL 2026-08-01. The regression leg passes: running an out-of-tree script from C:\\Users\\nvelayudhan and then from a temp dir, session_cookie_path() and persistent_profile_dir() return an identical absolute path anchored at REPO_ROOT. The old absolute-write vs relative-read mismatch is gone, so the error handler can no longer delete a valid cookie file just because cwd differed. tests/test_session.py::test_cookie_persistence_works_when_cwd_changes covers this in CI. NOT YET RUN: the live leg (real login, stop and restart the MCP server, perform a read action, confirm no login prompt or challenge). That needs real LinkedIn credentials and a background worker, and SEQ-04 is still pending. Keep at in-progress until the live run happens."
     }
   }
 }

@@ -1,28 +1,47 @@
 name: Roadmap sync
 
 # Keeps docs/roadmap.json (the roadmap canvas's durable state) in step with
-# GitHub. When a PR that closes a tracked roadmap issue merges, this workflow
-# marks the matching task "done" and stamps its PR number, then commits the
-# change straight to the base branch. An already-open roadmap canvas panel
-# picks this up automatically after the next `git pull` (it watches the state
-# file on disk and refreshes live once it changes).
+# GitHub. When a PR that closes a tracked roadmap issue lands on the default
+# branch, this workflow marks the matching task "done" and stamps its PR
+# number, then commits the change straight back. An already-open roadmap canvas
+# panel picks this up automatically after the next `git pull` (it watches the
+# state file on disk and refreshes live once it changes).
+#
+# This triggers on push, not on `pull_request: closed`. PRs opened by the
+# Copilot coding agent are authored by a bot, so GitHub parks their workflow
+# runs at "action_required" until a maintainer approves them by hand. Runs for
+# PRs #30, #31 and #32 all stalled that way and the board silently fell three
+# tasks behind. The push that merging produces is attributed to the human who
+# clicked merge, so it runs unattended.
 
 on:
-  pull_request:
-    types: [closed]
+  push:
+    branches: [master]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "Merged PR number to sync by hand (for repairing a missed sync)"
+        required: false
+        type: string
 
 permissions:
   contents: write
+  pull-requests: read
+
+# Two PRs merged close together would otherwise race on the same file and one
+# would lose its update to the other's push.
+concurrency:
+  group: roadmap-sync
+  cancel-in-progress: false
 
 jobs:
   sync:
-    if: github.event.pull_request.merged == true
     runs-on: ubuntu-latest
     steps:
-      - name: Check out base branch
+      - name: Check out branch
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.base.ref }}
+          ref: ${{ github.ref_name }}
           fetch-depth: 0
 
       - name: Set up Node.js
@@ -32,9 +51,11 @@ jobs:
 
       - name: Sync roadmap state from merged PR
         env:
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          PR_BODY: ${{ github.event.pull_request.body }}
-          PR_MERGED: "true"
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          PUSH_BEFORE: ${{ github.event.before }}
+          PUSH_AFTER: ${{ github.sha }}
+          PR_NUMBER: ${{ inputs.pr_number }}
         run: node scripts/roadmap-sync.mjs
 
       - name: Commit and push roadmap update
@@ -46,5 +67,7 @@ jobs:
           git config user.name "roadmap-sync-bot"
           git config user.email "roadmap-sync-bot@users.noreply.github.com"
           git add docs/roadmap.json
-          git commit -m "chore(roadmap): sync task status from PR #${{ github.event.pull_request.number }}"
-          git push origin HEAD:${{ github.event.pull_request.base.ref }}
+          git commit -m "chore(roadmap): sync task status from ${{ github.sha }}"
+          # The branch may have moved while this run was queued behind another.
+          git pull --rebase origin ${{ github.ref_name }}
+          git push origin HEAD:${{ github.ref_name }}
