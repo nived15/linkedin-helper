@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import random
+import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -114,9 +115,58 @@ def get_or_create_encryption_key() -> bytes:
     return new_key
 
 
-def session_cookie_path(platform: str) -> Path:
+def session_cookie_path(platform: str, account_seed: str | None = None) -> Path:
     """Return the encrypted cookie path for a platform."""
-    return SESSIONS_DIR / f"{platform}_cookies.json"
+    if not account_seed:
+        return SESSIONS_DIR / f"{platform}_cookies.json"
+    return SESSIONS_DIR / f"{platform}_{account_session_suffix(platform, account_seed)}_cookies.json"
+
+
+def resolve_account_seed(platform: str, account_seed: str | None = None) -> str:
+    """Resolve seed source used to isolate per-account artifacts."""
+    normalized_seed = (account_seed or "").strip()
+    if normalized_seed:
+        return normalized_seed
+
+    env_seed = os.getenv(f"{platform.upper()}_USERNAME", "").strip()
+    if env_seed:
+        return env_seed
+
+    logger.warning(
+        "No account seed configured for %s; using shared platform seed for persisted session artifacts.",
+        platform,
+    )
+    return platform
+
+
+def account_session_suffix(platform: str, account_seed: str | None = None) -> str:
+    """Return a stable per-account suffix for persisted session artifacts."""
+    seed_source = resolve_account_seed(platform, account_seed)
+    return hashlib.sha256(seed_source.encode("utf-8")).hexdigest()[:12]
+
+
+def persistent_profile_dir(platform: str, account_seed: str | None = None) -> Path:
+    """Return the per-account persistent profile directory."""
+    return SESSIONS_DIR / f"{platform}_{account_session_suffix(platform, account_seed)}_profile"
+
+
+def resolve_proxy_url(
+    platform: str,
+    account_seed: str | None = None,
+    explicit_proxy_url: str | None = None,
+) -> str | None:
+    """Resolve proxy URL, preferring explicit value and account-scoped env vars."""
+    if explicit_proxy_url:
+        return explicit_proxy_url.strip() or None
+
+    if account_seed:
+        account_key = re.sub(r"[^A-Z0-9]+", "_", account_seed.upper()).strip("_")
+        env_proxy = os.getenv(f"{platform.upper()}_PROXY_{account_key}", "").strip()
+        if env_proxy:
+            return env_proxy
+
+    proxy_url = os.getenv(f"{platform.upper()}_PROXY", "").strip()
+    return proxy_url or None
 
 
 def build_fingerprint_profile(platform: str, account_seed: str | None = None) -> FingerprintProfile:
@@ -178,7 +228,7 @@ def build_stealth_script(profile: FingerprintProfile) -> str:
 """
 
 
-async def save_cookies(page, platform):
+async def save_cookies(page, platform, account_seed: str | None = None):
     """Save cookies with proper directory permissions."""
     try:
         cookies = await page.context.cookies()
@@ -197,7 +247,7 @@ async def save_cookies(page, platform):
             json.dumps(cookie_data).encode(),
         )
 
-        cookie_file = session_cookie_path(platform)
+        cookie_file = session_cookie_path(platform, account_seed)
         with open(cookie_file, "wb") as cookie_handle:
             cookie_handle.write(encrypted_data)
         os.chmod(cookie_file, 0o600)
@@ -205,9 +255,9 @@ async def save_cookies(page, platform):
         raise RuntimeError(f"Failed to save cookies: {exc}") from exc
 
 
-async def load_cookies(context, platform):
+async def load_cookies(context, platform, account_seed: str | None = None):
     """Load encrypted cookies for a platform if available and fresh."""
-    cookie_file = session_cookie_path(platform)
+    cookie_file = session_cookie_path(platform, account_seed)
     try:
         with open(cookie_file, "rb") as cookie_handle:
             encrypted_data = cookie_handle.read()
@@ -234,14 +284,23 @@ async def load_cookies(context, platform):
 class PlaywrightChromiumDriver:
     """Small driver wrapper around Playwright Chromium."""
 
-    def __init__(self, platform: str, headless: bool, account_seed: str | None = None):
+    def __init__(
+        self,
+        platform: str,
+        headless: bool,
+        account_seed: str | None = None,
+        proxy_url: str | None = None,
+    ):
         self.platform = platform
         self.headless = headless
         self.account_seed = account_seed
+        self.proxy_url = resolve_proxy_url(platform, account_seed, proxy_url)
         self.playwright = None
         self.browser = None
         self.context = None
         self.page = None
+        self.use_persistent_context = True
+        self.user_data_dir = persistent_profile_dir(platform, account_seed)
         self.fingerprint = build_fingerprint_profile(platform, account_seed)
 
     async def launch(self):
@@ -249,31 +308,41 @@ class PlaywrightChromiumDriver:
             raise RuntimeError("Failed to set up sessions directory for browser session")
 
         logger.info("Launching Chromium driver for %s", self.platform)
+        self.user_data_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+        os.chmod(self.user_data_dir, 0o700)
         self.playwright = await asyncio.wait_for(async_playwright().start(), timeout=30)
-        self.browser = await self.playwright.chromium.launch(
-            headless=self.headless,
-            timeout=30000,
-            args=[
+        profile_has_state = self.user_data_dir.exists() and any(self.user_data_dir.iterdir())
+        launch_kwargs = {
+            "headless": self.headless,
+            "timeout": 30000,
+            "args": [
                 "--disable-dev-shm-usage",
                 "--no-sandbox",
                 "--disable-blink-features=AutomationControlled",
                 "--start-maximized",
             ],
+            "viewport": {"width": 1280, "height": 800},
+            "user_agent": self.fingerprint.user_agent,
+            "locale": self.fingerprint.locale,
+            "timezone_id": self.fingerprint.timezone_id,
+            "extra_http_headers": {"Accept-Language": self.fingerprint.accept_language},
+        }
+        if self.proxy_url:
+            launch_kwargs["proxy"] = {"server": self.proxy_url}
+
+        self.context = await self.playwright.chromium.launch_persistent_context(
+            str(self.user_data_dir),
+            **launch_kwargs,
         )
-        self.context = await self.browser.new_context(
-            viewport={"width": 1280, "height": 800},
-            user_agent=self.fingerprint.user_agent,
-            locale=self.fingerprint.locale,
-            timezone_id=self.fingerprint.timezone_id,
-            extra_http_headers={"Accept-Language": self.fingerprint.accept_language},
-        )
+        self.browser = getattr(self.context, "browser", None)
         await self.context.add_init_script(build_stealth_script(self.fingerprint))
 
-        try:
-            loaded = await load_cookies(self.context, self.platform)
-            logger.info("Session cookies loaded" if loaded else "No saved session")
-        except Exception as exc:
-            logger.warning("Cookie load error: %s", exc)
+        if not profile_has_state:
+            try:
+                loaded = await load_cookies(self.context, self.platform, self.account_seed)
+                logger.info("Imported legacy encrypted cookies" if loaded else "No legacy encrypted cookies to import")
+            except Exception as exc:
+                logger.warning("Cookie import error: %s", exc)
 
         self.page = await self.context.new_page()
 
@@ -287,16 +356,21 @@ class PlaywrightChromiumDriver:
 
     async def close(self):
         """Close all Playwright resources."""
+        if self.context:
+            try:
+                await self.context.close()
+            except Exception as exc:
+                logger.warning("Error closing persistent browser context: %s", exc)
         if self.browser:
             try:
                 await self.browser.close()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("Error closing browser: %s", exc)
         if self.playwright:
             try:
                 await self.playwright.stop()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("Error stopping Playwright: %s", exc)
         self.browser = None
         self.playwright = None
         self.context = None
@@ -312,16 +386,27 @@ class BrowserSession:
     _context = None
     _page = None
 
-    def __init__(self, platform="linkedin", headless=False, account_seed: str | None = None, **_kwargs):
+    def __init__(
+        self,
+        platform="linkedin",
+        headless=False,
+        account_seed: str | None = None,
+        proxy_url: str | None = None,
+        **_kwargs,
+    ):
         self.platform = platform
         self.headless = headless
         self.account_seed = account_seed
+        self.proxy_url = proxy_url
 
     async def __aenter__(self):
         if (
             BrowserSession._driver is None
-            or BrowserSession._browser is None
-            or not BrowserSession._browser.is_connected()
+            or BrowserSession._context is None
+            or (
+                BrowserSession._browser is not None
+                and not BrowserSession._browser.is_connected()
+            )
         ):
             await self._launch()
         return self
@@ -335,8 +420,14 @@ class BrowserSession:
         return page
 
     async def save_session(self, page):
+        if (
+            BrowserSession._driver is not None
+            and BrowserSession._driver.use_persistent_context
+        ):
+            logger.debug("Persistent context enabled; skipping encrypted cookie export")
+            return
         try:
-            await save_cookies(page, self.platform)
+            await save_cookies(page, self.platform, self.account_seed)
         except Exception as exc:
             logger.error("Error saving session: %s", exc)
 
@@ -345,6 +436,7 @@ class BrowserSession:
             platform=self.platform,
             headless=self.headless,
             account_seed=self.account_seed,
+            proxy_url=self.proxy_url,
         )
         await BrowserSession._driver.launch()
         self._sync_state(page=BrowserSession._driver.page)

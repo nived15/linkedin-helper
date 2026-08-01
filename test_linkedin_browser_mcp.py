@@ -47,10 +47,12 @@ async def test_browser_session(monkeypatch):
             )
 
     class FakeContext:
-        def __init__(self, **kwargs):
+        def __init__(self, browser=None, **kwargs):
+            self.browser = browser
             self.kwargs = kwargs
             self.init_scripts = []
             self.pages = []
+            self.closed = False
 
         async def add_init_script(self, script):
             self.init_scripts.append(script)
@@ -63,17 +65,15 @@ async def test_browser_session(monkeypatch):
             self.pages.append(page)
             return page
 
+        async def close(self):
+            self.closed = True
+
     class FakeBrowser:
         def __init__(self):
-            self.context = None
             self.closed = False
 
         def is_connected(self):
             return not self.closed
-
-        async def new_context(self, **kwargs):
-            self.context = FakeContext(**kwargs)
-            return self.context
 
         async def close(self):
             self.closed = True
@@ -81,9 +81,13 @@ async def test_browser_session(monkeypatch):
     class FakeChromium:
         def __init__(self):
             self.browser = FakeBrowser()
+            self.user_data_dir = None
+            self.launch_kwargs = None
 
-        async def launch(self, **_kwargs):
-            return self.browser
+        async def launch_persistent_context(self, user_data_dir, **kwargs):
+            self.user_data_dir = user_data_dir
+            self.launch_kwargs = kwargs
+            return FakeContext(**kwargs)
 
     class FakePlaywright:
         def __init__(self):
@@ -109,7 +113,7 @@ async def test_browser_session(monkeypatch):
         lambda: True,
     )
 
-    async def fake_load_cookies(_context, _platform):
+    async def fake_load_cookies(_context, _platform, _account_seed=None):
         return False
 
     monkeypatch.setattr(
@@ -127,7 +131,6 @@ async def test_browser_session(monkeypatch):
     ) as session:
         page = await session.new_page()
         assert page is not None
-        assert BrowserSession._browser is not None
         assert BrowserSession._context is not None
         assert BrowserSession._context.kwargs["user_agent"] == profile.user_agent
         assert BrowserSession._context.kwargs["locale"] == profile.locale
@@ -137,6 +140,7 @@ async def test_browser_session(monkeypatch):
             == profile.accept_language
         )
         assert "navigator, 'webdriver'" in BrowserSession._context.init_scripts[0]
+        assert "linkedin_" in str(BrowserSession._driver.user_data_dir)
 
         page = await session.new_page("https://www.linkedin.com/feed/")
         assert page.goto_calls[0]["wait_until"] == "networkidle"
