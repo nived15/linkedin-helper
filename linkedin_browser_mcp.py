@@ -9,6 +9,7 @@ from urllib.parse import quote
 from dotenv import load_dotenv
 from fastmcp import Context, FastMCP
 
+from linkedin_mcp.audit import audit_linkedin_action, record_tool_result
 from linkedin_mcp.browser.humanize import (
     cooldown,
     dwell_and_click,
@@ -113,7 +114,16 @@ async def fill_selector_fallback(page, name: str, value: str, timeout: int = 100
     return handle
 
 
+def record_comment_outcome(results: list, post_url: str, status: str, message: str, **extra) -> dict:
+    """Append one batch comment result and write its own audit row."""
+    entry = {"post_url": post_url, "status": status, "message": message, **extra}
+    results.append(entry)
+    record_tool_result("post_comment", entry, target=post_url)
+    return entry
+
+
 @mcp.tool()
+@audit_linkedin_action("browser_close")
 async def close_browser(ctx: Context) -> dict:
     """Close the persistent browser session when the workflow is finished."""
     await BrowserSession.shutdown()
@@ -121,6 +131,7 @@ async def close_browser(ctx: Context) -> dict:
 
 
 @mcp.tool()
+@audit_linkedin_action("login", target="username")
 async def login_linkedin(username: str | None = None, password: str | None = None, ctx: Context | None = None) -> dict:
     """Open LinkedIn login page in browser for manual login.
     Username and password are optional - if not provided, user will need to enter them manually."""
@@ -179,6 +190,7 @@ async def login_linkedin(username: str | None = None, password: str | None = Non
             return {"status": "error", "message": f"Login process error: {str(e)}"}
 
 @mcp.tool()
+@audit_linkedin_action("login_secure")
 async def login_linkedin_secure(ctx: Context | None = None) -> dict:
     """Open LinkedIn login page in browser for manual login using environment credentials as default values.
     
@@ -205,6 +217,7 @@ async def login_linkedin_secure(ctx: Context | None = None) -> dict:
     return await login_linkedin(username, password, ctx)
 
 @mcp.tool()
+@audit_linkedin_action("profile_view", target="username")
 async def get_linkedin_profile(username: str, ctx: Context, direct: bool = False) -> dict:
     """Get LinkedIn profile information including follower count and profile views.
 
@@ -305,6 +318,7 @@ async def get_linkedin_profile(username: str, ctx: Context, direct: bool = False
             return {"status": "error", "message": f"Failed to get profile: {str(e)}"}
 
 @mcp.tool()
+@audit_linkedin_action("feed_browse", capture=("count",))
 async def browse_linkedin_feed(ctx: Context, count: int = 5) -> dict:
     """Browse LinkedIn feed and return recent posts
     
@@ -465,6 +479,7 @@ async def browse_linkedin_feed(ctx: Context, count: int = 5) -> dict:
         
 
 @mcp.tool()
+@audit_linkedin_action("profile_search", target="query", capture=("count",))
 async def search_linkedin_profiles(query: str, ctx: Context, count: int = 5) -> dict:
     """Search for LinkedIn profiles matching a query"""
     async with BrowserSession(platform='linkedin') as session:
@@ -541,6 +556,7 @@ async def search_linkedin_profiles(query: str, ctx: Context, count: int = 5) -> 
             }
         
 @mcp.tool() 
+@audit_linkedin_action("profile_view", target="profile_url")
 async def view_linkedin_profile(profile_url: str, ctx: Context, direct: bool = False) -> dict:
     """Visit and extract data from a specific LinkedIn profile.
 
@@ -636,6 +652,11 @@ async def view_linkedin_profile(profile_url: str, ctx: Context, direct: bool = F
         
 
 @mcp.tool()
+@audit_linkedin_action(
+    lambda bound: f"post_{bound.get('action') or 'like'}",
+    target="post_url",
+    capture=("comment",),
+)
 async def interact_with_linkedin_post(post_url: str, ctx: Context, action: str = "like", comment: str = None) -> dict:
     """Interact with a LinkedIn post (like, comment)"""
     if not ('linkedin.com/posts/' in post_url or 'linkedin.com/feed/update/' in post_url):
@@ -760,6 +781,7 @@ async def interact_with_linkedin_post(post_url: str, ctx: Context, action: str =
         
 
 @mcp.tool()
+@audit_linkedin_action("connection_request", target="profile_url", capture=("note",))
 async def send_connection_request(profile_url: str, ctx: Context, note: str | None = None, direct: bool = False) -> dict:
     """Send a connection request to a LinkedIn profile with an optional personalised note.
     
@@ -872,6 +894,7 @@ async def send_connection_request(profile_url: str, ctx: Context, note: str | No
 
 
 @mcp.tool()
+@audit_linkedin_action("post_search", target="query", capture=("count", "sort_by"))
 async def search_linkedin_posts(query: str, ctx: Context, count: int = 10, sort_by: str = "relevance") -> dict:
     """Search for LinkedIn posts matching a keyword query and return them with metadata.
 
@@ -1131,6 +1154,7 @@ async def search_linkedin_posts(query: str, ctx: Context, count: int = 10, sort_
 
 
 @mcp.tool()
+@audit_linkedin_action("post_comment_batch")
 async def comment_on_approved_posts(approved_posts: list, ctx: Context) -> dict:
     """Post comments on a list of user-approved LinkedIn posts.
 
@@ -1164,11 +1188,12 @@ async def comment_on_approved_posts(approved_posts: list, ctx: Context) -> dict:
                 comment_text = item.get('comment', '').strip()
 
                 if not post_url or not comment_text:
-                    results.append({
-                        "post_url": post_url,
-                        "status": "skipped",
-                        "message": "Missing post_url or comment"
-                    })
+                    record_comment_outcome(
+                        results,
+                        post_url,
+                        "skipped",
+                        "Missing post_url or comment",
+                    )
                     continue
 
                 report_progress(ctx, i, total, f"Commenting on post {i + 1}/{total}")
@@ -1184,7 +1209,7 @@ async def comment_on_approved_posts(approved_posts: list, ctx: Context) -> dict:
                     await page.goto(nav_url, wait_until='domcontentloaded', timeout=60000)
 
                     if 'login' in page.url or 'authwall' in page.url:
-                        results.append({"post_url": post_url, "status": "error", "message": "Session expired"})
+                        record_comment_outcome(results, post_url, "error", "Session expired")
                         continue
 
                     await wait_for_selector_fallback(page, 'post_detail_container', timeout=20000)
@@ -1225,18 +1250,18 @@ async def comment_on_approved_posts(approved_posts: list, ctx: Context) -> dict:
                         }''', selector_payload('post_comment_editor', 'post_comment_submit'))
                         if submitted:
                             await pace(2.5)
-                            results.append({"post_url": post_url, "status": "success", "message": "Comment posted successfully", "comment": comment_text})
+                            record_comment_outcome(results, post_url, "success", "Comment posted successfully", comment=comment_text)
                         else:
-                            results.append({"post_url": post_url, "status": "error", "message": "Submit button not found"})
+                            record_comment_outcome(results, post_url, "error", "Submit button not found")
                         continue
                     else:
                         await dwell_and_click(submit_btn)
                         await pace(2.5)
-                        results.append({"post_url": post_url, "status": "success", "message": "Comment posted successfully", "comment": comment_text})
+                        record_comment_outcome(results, post_url, "success", "Comment posted successfully", comment=comment_text)
 
                 except Exception as e:
                     logger.error(f"Error commenting on {post_url}: {str(e)}")
-                    results.append({"post_url": post_url, "status": "error", "message": str(e)})
+                    record_comment_outcome(results, post_url, "error", str(e))
 
                 await cooldown()
 
