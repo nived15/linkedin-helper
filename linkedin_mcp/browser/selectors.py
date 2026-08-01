@@ -44,6 +44,22 @@ SELECTORS: dict[str, tuple[str, ...]] = {
         ".pv-shared-text-with-see-more .inline-show-more-text",
         ".display-flex.ph5.pv3 .visually-hidden",
     ),
+    "global_search_trigger": (
+        "button.search-global-typeahead__collapsed-search-button",
+        "#global-nav-search button",
+        'button[aria-label="Search"]',
+    ),
+    "global_search_input": (
+        "input.search-global-typeahead__input",
+        "#global-nav-typeahead input",
+        'input[role="combobox"][aria-label*="Search"]',
+        'input[placeholder="Search"]',
+    ),
+    "global_search_typeahead_option": (
+        'div[role="listbox"] li',
+        ".search-typeahead-v2__hit",
+        ".search-global-typeahead__hit",
+    ),
     "search_result_container": (
         ".reusable-search__result-container",
         ".search-results-container .entity-result",
