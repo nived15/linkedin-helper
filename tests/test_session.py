@@ -50,8 +50,15 @@ def test_resolve_proxy_url_prefers_per_account_env(monkeypatch):
     monkeypatch.setenv("LINKEDIN_PROXY_TEST_EXAMPLE_COM", "http://account-proxy:9000")
 
     assert (
+        session_module.resolve_proxy_url(
+            "linkedin",
+            account_seed="test@example.com",
+            explicit_proxy_url="http://explicit:7000",
+        )
+        == "http://explicit:7000"
+    )
+    assert (
         session_module.resolve_proxy_url("linkedin", account_seed="test@example.com")
         == "http://account-proxy:9000"
     )
     assert session_module.resolve_proxy_url("linkedin", account_seed="other@example.com") == "http://fallback:8080"
-

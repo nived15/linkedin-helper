@@ -298,6 +298,7 @@ class PlaywrightChromiumDriver:
         self.browser = None
         self.context = None
         self.page = None
+        self.use_persistent_context = True
         self.user_data_dir = persistent_profile_dir(platform, account_seed)
         self.fingerprint = build_fingerprint_profile(platform, account_seed)
 
@@ -418,7 +419,10 @@ class BrowserSession:
         return page
 
     async def save_session(self, page):
-        if BrowserSession._driver is not None:
+        if (
+            BrowserSession._driver is not None
+            and BrowserSession._driver.use_persistent_context
+        ):
             logger.debug("Persistent context enabled; skipping encrypted cookie export")
             return
         try:
