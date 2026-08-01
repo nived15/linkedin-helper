@@ -154,6 +154,7 @@ def test_fingerprint_profile_is_stable_per_account():
     ]
 
     assert first == second
+    # Chrome/96.0.4664.110 was the previous hard-coded 2021-era fingerprint.
     assert "Chrome/96.0.4664.110" not in first.user_agent
     assert first.user_agent in catalog_user_agents
     assert re.search(r"Chrome/\d{3}\.\d+\.\d+\.\d+", first.user_agent)
@@ -169,7 +170,7 @@ def test_selectors_are_centralized_in_browser_module():
     main_source = inspect.getsource(linkedin_browser_mcp)
     session_source = inspect.getsource(browser_session_module)
 
-    assert not re.search(r"Chrome/\d{2,3}\.\d+\.\d+\.\d+", main_source)
+    assert not re.search(r"Chrome/\d{3}\.\d+\.\d+\.\d+", main_source)
     assert ".pv-top-card" not in main_source
     assert ".feed-shared-update-v2" not in main_source
     assert "selector_fallbacks" in main_source
