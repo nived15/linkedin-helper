@@ -124,8 +124,9 @@ def session_cookie_path(platform: str, account_seed: str | None = None) -> Path:
 
 def resolve_account_seed(platform: str, account_seed: str | None = None) -> str:
     """Resolve seed source used to isolate per-account artifacts."""
-    if account_seed and account_seed.strip():
-        return account_seed.strip()
+    normalized_seed = (account_seed or "").strip()
+    if normalized_seed:
+        return normalized_seed
 
     env_seed = os.getenv(f"{platform.upper()}_USERNAME", "").strip()
     if env_seed:
@@ -310,7 +311,7 @@ class PlaywrightChromiumDriver:
         self.user_data_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
         os.chmod(self.user_data_dir, 0o700)
         self.playwright = await asyncio.wait_for(async_playwright().start(), timeout=30)
-        profile_has_state = any(self.user_data_dir.iterdir())
+        profile_has_state = self.user_data_dir.exists() and any(self.user_data_dir.iterdir())
         launch_kwargs = {
             "headless": self.headless,
             "timeout": 30000,
