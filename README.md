@@ -182,12 +182,27 @@ mcp-linkedin-server/
 | `get_linkedin_profile` | Fetch profile data by LinkedIn username |
 | `browse_linkedin_feed` | Browse feed and return recent posts |
 | `search_linkedin_profiles` | Search for profiles by keyword |
-| `view_linkedin_profile` | View a profile by URL |
+| `view_linkedin_profile` | View a profile by URL (navigates via the search bar) |
 | `interact_with_linkedin_post` | Like, comment, or share a post |
 | `search_linkedin_posts` | Search for LinkedIn posts by keyword |
 | `comment_on_approved_posts` | Post comments on a batch of approved posts |
 | `send_connection_request` | Send a connection request with optional personalised note |
 | `close_browser` | Close the persistent browser session |
+
+### Pacing and navigation
+
+Every delay routes through `linkedin_mcp/browser/humanize.py`. No tool sleeps on
+its own. Two presets ship with it: `SAFE` (the default) and `FAST`. Set
+`LINKEDIN_PACING=fast` in `.env` to switch. SAFE waits 10 to 60 seconds between
+actions, types at roughly 70 to 210 ms per keystroke with pauses at punctuation
+and word boundaries, dwells on a control before clicking it, and scrolls in
+uneven steps.
+
+Profile visits go through `linkedin_mcp/browser/navigate.py`, which types the
+lead's name into the LinkedIn search bar and clicks the matching result.
+LinkedIn caps direct profile URL loads at roughly 40 per 24 hours, so
+`get_linkedin_profile`, `view_linkedin_profile` and `send_connection_request`
+only load a URL directly when you pass `direct=True`.
 
 ---
 

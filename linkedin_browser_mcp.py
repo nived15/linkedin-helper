@@ -1,8 +1,6 @@
-import asyncio
 import json
 import logging
 import os
-import random
 import sys
 import time
 from pathlib import Path
@@ -11,6 +9,15 @@ from urllib.parse import quote
 from dotenv import load_dotenv
 from fastmcp import Context, FastMCP
 
+from linkedin_mcp.browser.humanize import (
+    cooldown,
+    dwell_and_click,
+    pace,
+    scroll_page,
+    settle,
+    type_text,
+)
+from linkedin_mcp.browser.navigate import goto_profile
 from linkedin_mcp.browser.selectors import (
     selector_fallbacks,
     selector_payload,
@@ -95,14 +102,14 @@ async def query_selector_fallback(page, name: str):
 async def click_selector_fallback(page, name: str, timeout: int = 10000):
     """Click the first matching selector in the configured fallback order."""
     handle = await wait_for_selector_fallback(page, name, timeout=timeout)
-    await handle.click()
+    await dwell_and_click(handle)
     return handle
 
 
 async def fill_selector_fallback(page, name: str, value: str, timeout: int = 10000):
     """Fill the first matching selector in the configured fallback order."""
     handle = await wait_for_selector_fallback(page, name, timeout=timeout)
-    await handle.fill(value)
+    await type_text(handle, value, clear=True)
     return handle
 
 
@@ -158,7 +165,7 @@ async def login_linkedin(username: str | None = None, password: str | None = Non
                 logger.info("Manual login successful")
                 await session.save_session(page)
                 # Keep browser open for a moment to show success
-                await asyncio.sleep(3)
+                await pace(3.0)
                 return {"status": "success", "message": "Manual login successful"}
             except Exception as e:
                 logger.error(f"Login timeout: {str(e)}")
@@ -198,11 +205,17 @@ async def login_linkedin_secure(ctx: Context | None = None) -> dict:
     return await login_linkedin(username, password, ctx)
 
 @mcp.tool()
-async def get_linkedin_profile(username: str, ctx: Context) -> dict:
-    """Get LinkedIn profile information including follower count and profile views"""
+async def get_linkedin_profile(username: str, ctx: Context, direct: bool = False) -> dict:
+    """Get LinkedIn profile information including follower count and profile views.
+
+    Set direct=True to load the profile URL straight away instead of navigating
+    through the LinkedIn search bar. LinkedIn caps direct profile loads, so this
+    is an escape hatch rather than the normal path.
+    """
     async with BrowserSession(platform='linkedin', headless=False) as session:
         try:
-            page = await session.new_page(f'https://www.linkedin.com/in/{username}')
+            page = await session.new_page()
+            await goto_profile(page, f'https://www.linkedin.com/in/{username}', direct=direct)
             
             # Check if we're logged in
             if 'login' in page.url:
@@ -319,7 +332,7 @@ async def browse_linkedin_feed(ctx: Context, count: int = 5) -> dict:
             ctx.info(f"Browsing feed for {count} posts...")
             
             # Wait for the feed to load before starting scroll loop
-            await page.wait_for_timeout(3000)
+            await settle()
 
             # Scroll to load content
             for i in range(min(count, 20)):  # Limit to reasonable number
@@ -338,8 +351,7 @@ async def browse_linkedin_feed(ctx: Context, count: int = 5) -> dict:
 
                     if not post_selector:
                         errors.append(f"Error during scroll {i}: No feed post elements found on page")
-                        await page.evaluate('window.scrollBy(0, 800)')
-                        await page.wait_for_timeout(1500)
+                        await scroll_page(page, 800)
                         continue
                     
                     # Extract visible posts
@@ -427,8 +439,7 @@ async def browse_linkedin_feed(ctx: Context, count: int = 5) -> dict:
                         break
                         
                     # Scroll down to load more content
-                    await page.evaluate('window.scrollBy(0, 800)')
-                    await page.wait_for_timeout(1000)  # Wait for content to load
+                    await scroll_page(page, 800)
                     
                 except Exception as scroll_error:
                     errors.append(f"Error during scroll {i}: {str(scroll_error)}")
@@ -530,8 +541,12 @@ async def search_linkedin_profiles(query: str, ctx: Context, count: int = 5) -> 
             }
         
 @mcp.tool() 
-async def view_linkedin_profile(profile_url: str, ctx: Context) -> dict:
-    """Visit and extract data from a specific LinkedIn profile"""
+async def view_linkedin_profile(profile_url: str, ctx: Context, direct: bool = False) -> dict:
+    """Visit and extract data from a specific LinkedIn profile.
+
+    Navigation goes through the LinkedIn search bar by default. Set direct=True
+    to load the URL straight away, which LinkedIn caps at roughly 40 per 24h.
+    """
     if not ('linkedin.com/in/' in profile_url):
         return {
             "status": "error",
@@ -540,7 +555,8 @@ async def view_linkedin_profile(profile_url: str, ctx: Context) -> dict:
         
     async with BrowserSession(platform='linkedin') as session:
         try:
-            page = await session.new_page(profile_url)
+            page = await session.new_page()
+            await goto_profile(page, profile_url, direct=direct)
             
             # Check if we're logged in
             if 'login' in page.url:
@@ -693,7 +709,7 @@ async def interact_with_linkedin_post(post_url: str, ctx: Context, action: str =
                 await click_selector_fallback(page, 'post_comment_submit')
                 
                 # Wait for comment to appear
-                await page.wait_for_timeout(2000)
+                await pace(2.0)
                 
                 result = {
                     "status": "success",
@@ -706,11 +722,11 @@ async def interact_with_linkedin_post(post_url: str, ctx: Context, action: str =
                 try:
                     # Click the repost button
                     await click_selector_fallback(page, 'post_repost_button', timeout=5000)
-                    await page.wait_for_timeout(1000)
+                    await pace(1.0)
                     
                     # Click "Repost" option (instant repost without comment)
                     await click_selector_fallback(page, 'post_repost_option', timeout=5000)
-                    await page.wait_for_timeout(2000)
+                    await pace(2.0)
                     
                     result = {
                         "status": "success",
@@ -744,13 +760,16 @@ async def interact_with_linkedin_post(post_url: str, ctx: Context, action: str =
         
 
 @mcp.tool()
-async def send_connection_request(profile_url: str, ctx: Context, note: str | None = None) -> dict:
+async def send_connection_request(profile_url: str, ctx: Context, note: str | None = None, direct: bool = False) -> dict:
     """Send a connection request to a LinkedIn profile with an optional personalised note.
     
     Args:
         profile_url: The LinkedIn profile URL (must contain 'linkedin.com/in/')
         ctx: MCP context for logging and progress reporting
         note: Optional personalised connection note (max 300 characters)
+        direct: Load the profile URL directly instead of navigating via the
+            LinkedIn search bar. LinkedIn caps direct profile loads, so leave
+            this off unless in-page navigation is unavailable.
         
     Returns:
         dict: Contains status, message, and request details
@@ -769,7 +788,8 @@ async def send_connection_request(profile_url: str, ctx: Context, note: str | No
     
     async with BrowserSession(platform='linkedin', headless=False) as session:
         try:
-            page = await session.new_page(profile_url)
+            page = await session.new_page()
+            await goto_profile(page, profile_url, direct=direct)
             
             # Check if we're logged in
             if 'login' in page.url:
@@ -791,8 +811,7 @@ async def send_connection_request(profile_url: str, ctx: Context, note: str | No
                 # Connect might be hidden under "More" dropdown
                 try:
                     more_button = await wait_for_selector_fallback(page, 'more_actions_button', timeout=3000)
-                    await more_button.click()
-                    await page.wait_for_timeout(1000)
+                    await dwell_and_click(more_button)
                     connect_button = await wait_for_selector_fallback(page, 'connect_button_more_menu', timeout=3000)
                 except Exception:
                     pass
@@ -803,28 +822,26 @@ async def send_connection_request(profile_url: str, ctx: Context, note: str | No
                     "message": "Connect button not found. Profile may already be connected or pending."
                 }
             
-            await connect_button.click()
-            await page.wait_for_timeout(1500)
+            await dwell_and_click(connect_button)
+            await pace(1.5)
             
             if note:
                 # Click "Add a note" button in the connection dialog
                 try:
                     add_note_button = await wait_for_selector_fallback(page, 'connect_add_note_button', timeout=3000)
-                    await add_note_button.click()
-                    await page.wait_for_timeout(500)
+                    await dwell_and_click(add_note_button)
                     
                     # Fill in the note
                     note_field = await wait_for_selector_fallback(page, 'connect_note_field', timeout=3000)
-                    await note_field.fill(note)
-                    await page.wait_for_timeout(500)
+                    await type_text(note_field, note, clear=True)
                 except Exception as note_error:
                     ctx.info(f"Could not add note: {str(note_error)}. Sending without note.")
             
             # Click Send
             try:
                 send_button = await wait_for_selector_fallback(page, 'connect_send_button', timeout=5000)
-                await send_button.click()
-                await page.wait_for_timeout(2000)
+                await dwell_and_click(send_button)
+                await pace(2.0)
             except Exception as send_error:
                 return {
                     "status": "error",
@@ -888,7 +905,7 @@ async def search_linkedin_posts(query: str, ctx: Context, count: int = 10, sort_
             report_progress(ctx, 10, 100, "Loading search results...")
 
             # LinkedIn's React app takes ~10s to fully hydrate search results
-            await page.wait_for_timeout(10000)
+            await pace(10.0)
             report_progress(ctx, 30, 100, "Extracting posts...")
 
             collected = []
@@ -1079,7 +1096,7 @@ async def search_linkedin_posts(query: str, ctx: Context, count: int = 10, sort_
                         window.scrollTo(0, document.body.scrollHeight);
                     }
                 }""", selector_payload('search_posts_scroll_main'))
-                await page.wait_for_timeout(3000)
+                await pace(3.0)
                 scroll_attempts += 1
                 report_progress(ctx, 30 + scroll_attempts * 5, 100, f"Found {len(collected)} posts so far...")
 
@@ -1171,12 +1188,12 @@ async def comment_on_approved_posts(approved_posts: list, ctx: Context) -> dict:
                         continue
 
                     await wait_for_selector_fallback(page, 'post_detail_container', timeout=20000)
-                    await page.wait_for_timeout(1500)
+                    await pace(1.5)
 
                     comment_trigger = await query_selector_fallback(page, 'post_comment_trigger')
                     if comment_trigger:
                         try:
-                            await comment_trigger.click()
+                            await dwell_and_click(comment_trigger)
                         except Exception:
                             pass
                     else:
@@ -1185,12 +1202,12 @@ async def comment_on_approved_posts(approved_posts: list, ctx: Context) -> dict:
                                 .find(b => (b.innerText || '').trim().toLowerCase() === 'comment');
                             if (btn) btn.click();
                         }''', selector_payload('generic_button'))
-                    await page.wait_for_timeout(1200)
+                    await pace(1.2)
 
                     editor = await wait_for_selector_fallback(page, 'post_comment_editor', timeout=8000)
-                    await editor.click()
-                    await editor.type(comment_text, delay=25)
-                    await page.wait_for_timeout(600)
+                    await dwell_and_click(editor)
+                    await type_text(editor, comment_text)
+                    await pace(0.6)
 
                     submit_btn = await query_selector_fallback(page, 'post_comment_submit')
                     if not submit_btn:
@@ -1207,21 +1224,21 @@ async def comment_on_approved_posts(approved_posts: list, ctx: Context) -> dict:
                             return false;
                         }''', selector_payload('post_comment_editor', 'post_comment_submit'))
                         if submitted:
-                            await page.wait_for_timeout(2500)
+                            await pace(2.5)
                             results.append({"post_url": post_url, "status": "success", "message": "Comment posted successfully", "comment": comment_text})
                         else:
                             results.append({"post_url": post_url, "status": "error", "message": "Submit button not found"})
                         continue
                     else:
-                        await submit_btn.click()
-                        await page.wait_for_timeout(2500)
+                        await dwell_and_click(submit_btn)
+                        await pace(2.5)
                         results.append({"post_url": post_url, "status": "success", "message": "Comment posted successfully", "comment": comment_text})
 
                 except Exception as e:
                     logger.error(f"Error commenting on {post_url}: {str(e)}")
                     results.append({"post_url": post_url, "status": "error", "message": str(e)})
 
-                await asyncio.sleep(4)
+                await cooldown()
 
             await session.save_session(page)
             success_count = sum(1 for r in results if r['status'] == 'success')
