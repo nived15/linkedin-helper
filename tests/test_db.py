@@ -52,7 +52,10 @@ def test_initialize_database_applies_full_schema(tmp_path):
     assert EXPECTED_TABLES.issubset(list_tables(conn))
     assert conn.execute("PRAGMA journal_mode").fetchone()[0].lower() == "wal"
     assert conn.execute("PRAGMA foreign_keys").fetchone()[0] == 1
-    versions = [row["version"] for row in conn.execute("SELECT version FROM schema_migrations").fetchall()]
+    versions = [
+        row["version"]
+        for row in conn.execute("SELECT version FROM schema_migrations ORDER BY version").fetchall()
+    ]
     assert versions == ["0001_init"]
 
 
@@ -66,5 +69,8 @@ def test_migrate_is_idempotent_on_rerun(tmp_path):
     assert migrate(second_conn) == []
     assert second_conn.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 1
     assert EXPECTED_TABLES.issubset(list_tables(second_conn))
-    versions = [row["version"] for row in second_conn.execute("SELECT version FROM schema_migrations").fetchall()]
+    versions = [
+        row["version"]
+        for row in second_conn.execute("SELECT version FROM schema_migrations ORDER BY version").fetchall()
+    ]
     assert versions == ["0001_init"]

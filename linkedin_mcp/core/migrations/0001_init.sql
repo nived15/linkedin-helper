@@ -28,6 +28,7 @@ CREATE TABLE IF NOT EXISTS working_hours (
     weekday INTEGER NOT NULL CHECK (weekday BETWEEN 0 AND 6),
     start_minute INTEGER NOT NULL CHECK (start_minute BETWEEN 0 AND 1439),
     end_minute INTEGER NOT NULL CHECK (end_minute BETWEEN 0 AND 1439),
+    CHECK (start_minute < end_minute),
     PRIMARY KEY (account_id, weekday),
     FOREIGN KEY (account_id) REFERENCES accounts (id) ON DELETE CASCADE
 );
@@ -214,6 +215,7 @@ CREATE TABLE IF NOT EXISTS campaign_leads (
     lead_id INTEGER NOT NULL,
     current_step_ord INTEGER NOT NULL,
     sublist TEXT NOT NULL CHECK (sublist IN ('queue', 'processing', 'successful', 'failed', 'replied', 'skipped', 'excluded')),
+    -- Stored as an ISO 8601 UTC timestamp string when populated by application code.
     next_run_at TEXT,
     attempts INTEGER NOT NULL DEFAULT 0,
     last_outcome TEXT,

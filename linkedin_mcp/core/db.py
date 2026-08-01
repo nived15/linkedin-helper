@@ -41,6 +41,26 @@ def ensure_schema_migrations_table(conn: sqlite3.Connection) -> None:
     )
 
 
+def split_sql_statements(sql: str) -> list[str]:
+    """Split a migration script into complete SQL statements."""
+    statements: list[str] = []
+    buffer = ""
+
+    for line in sql.splitlines():
+        buffer = f"{buffer}\n{line}" if buffer else line
+        if sqlite3.complete_statement(buffer):
+            statement = buffer.strip()
+            if statement:
+                statements.append(statement)
+            buffer = ""
+
+    trailing = buffer.strip()
+    if trailing:
+        statements.append(trailing)
+
+    return statements
+
+
 def applied_migrations(conn: sqlite3.Connection) -> set[str]:
     ensure_schema_migrations_table(conn)
     rows = conn.execute("SELECT version FROM schema_migrations").fetchall()
@@ -63,7 +83,8 @@ def migrate(
 
         migration_sql = migration_path.read_text(encoding="utf-8").strip()
         with conn:
-            conn.executescript(migration_sql)
+            for statement in split_sql_statements(migration_sql):
+                conn.execute(statement)
             conn.execute(
                 "INSERT INTO schema_migrations (version) VALUES (?)",
                 (version,),
