@@ -266,7 +266,7 @@ CREATE TABLE IF NOT EXISTS ai_drafts (
     kind TEXT NOT NULL CHECK (kind IN ('connection_note', 'message', 'comment', 'icp_evaluation')),
     context_json TEXT NOT NULL DEFAULT '{}',
     generated_text TEXT,
-    verdict_json TEXT, -- Holds {match, score, reason} for Ideal Customer Profile evaluation rows.
+    verdict_json TEXT, -- Holds {match, score, reason} for Ideal customer profile evaluation rows.
     status TEXT NOT NULL CHECK (status IN ('needs_generation', 'pending_approval', 'approved', 'rejected', 'sent')),
     model TEXT,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,

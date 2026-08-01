@@ -59,7 +59,10 @@ def split_sql_statements(sql: str, *, source: str = "migration") -> list[str]:
     trailing = "\n".join(buffer_lines).strip()
     if trailing:
         if not sqlite3.complete_statement(trailing):
-            raise ValueError(f"{source} contains an incomplete trailing SQL statement")
+            snippet = trailing[:100].replace("\n", " ")
+            raise ValueError(
+                f"{source} contains an incomplete trailing SQL statement: {snippet!r}"
+            )
         statements.append(trailing)
 
     return statements
@@ -87,8 +90,10 @@ def migrate(
 
         migration_sql = migration_path.read_text(encoding="utf-8").strip()
         conn.execute("BEGIN")
+        current_statement = ""
         try:
             for statement in split_sql_statements(migration_sql, source=version):
+                current_statement = statement
                 conn.execute(statement)
             conn.execute(
                 "INSERT INTO schema_migrations (version) VALUES (?)",
@@ -96,7 +101,10 @@ def migrate(
             )
         except Exception:
             conn.rollback()
-            raise
+            snippet = current_statement[:100].replace("\n", " ")
+            raise RuntimeError(
+                f"Failed to apply migration {version} near statement: {snippet!r}"
+            ) from None
         else:
             conn.commit()
         applied_now.append(version)
