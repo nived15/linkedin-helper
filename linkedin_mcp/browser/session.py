@@ -306,9 +306,10 @@ class PlaywrightChromiumDriver:
             raise RuntimeError("Failed to set up sessions directory for browser session")
 
         logger.info("Launching Chromium driver for %s", self.platform)
-        self.playwright = await asyncio.wait_for(async_playwright().start(), timeout=30)
         self.user_data_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
         os.chmod(self.user_data_dir, 0o700)
+        self.playwright = await asyncio.wait_for(async_playwright().start(), timeout=30)
+        profile_has_state = any(self.user_data_dir.iterdir())
         launch_kwargs = {
             "headless": self.headless,
             "timeout": 30000,
@@ -331,14 +332,15 @@ class PlaywrightChromiumDriver:
             str(self.user_data_dir),
             **launch_kwargs,
         )
-        self.browser = self.context.browser
+        self.browser = getattr(self.context, "browser", None)
         await self.context.add_init_script(build_stealth_script(self.fingerprint))
 
-        try:
-            loaded = await load_cookies(self.context, self.platform, self.account_seed)
-            logger.info("Session cookies loaded" if loaded else "No saved session")
-        except Exception as exc:
-            logger.warning("Cookie load error: %s", exc)
+        if not profile_has_state:
+            try:
+                loaded = await load_cookies(self.context, self.platform, self.account_seed)
+                logger.info("Imported legacy encrypted cookies" if loaded else "No legacy encrypted cookies to import")
+            except Exception as exc:
+                logger.warning("Cookie import error: %s", exc)
 
         self.page = await self.context.new_page()
 
@@ -416,6 +418,9 @@ class BrowserSession:
         return page
 
     async def save_session(self, page):
+        if BrowserSession._driver is not None:
+            logger.debug("Persistent context enabled; skipping encrypted cookie export")
+            return
         try:
             await save_cookies(page, self.platform, self.account_seed)
         except Exception as exc:

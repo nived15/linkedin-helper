@@ -47,7 +47,7 @@ async def test_browser_session(monkeypatch):
             )
 
     class FakeContext:
-        def __init__(self, browser, **kwargs):
+        def __init__(self, browser=None, **kwargs):
             self.browser = browser
             self.kwargs = kwargs
             self.init_scripts = []
@@ -87,7 +87,7 @@ async def test_browser_session(monkeypatch):
         async def launch_persistent_context(self, user_data_dir, **kwargs):
             self.user_data_dir = user_data_dir
             self.launch_kwargs = kwargs
-            return FakeContext(self.browser, **kwargs)
+            return FakeContext(**kwargs)
 
     class FakePlaywright:
         def __init__(self):
@@ -131,7 +131,6 @@ async def test_browser_session(monkeypatch):
     ) as session:
         page = await session.new_page()
         assert page is not None
-        assert BrowserSession._browser is not None
         assert BrowserSession._context is not None
         assert BrowserSession._context.kwargs["user_agent"] == profile.user_agent
         assert BrowserSession._context.kwargs["locale"] == profile.locale
