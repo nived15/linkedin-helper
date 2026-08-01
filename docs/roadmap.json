@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updatedAt": "2026-08-01T18:16:52.282Z",
+  "updatedAt": "2026-08-01T18:17:33.457Z",
   "tasks": {
     "CORE-01": {
       "status": "done",
@@ -41,9 +41,11 @@
       "prMerged": true
     },
     "DB-02": {
-      "status": "pending",
+      "status": "done",
       "notes": "",
-      "issueNumber": 12
+      "issueNumber": 12,
+      "prNumber": 34,
+      "prMerged": true
     },
     "DB-03": {
       "status": "pending",
