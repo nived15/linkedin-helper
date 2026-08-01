@@ -11,6 +11,7 @@ block.
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 
 from linkedin_mcp.leads.errors import LeadBlacklistedError, LeadNotFoundError
@@ -22,6 +23,7 @@ __all__ = [
     "blacklist_identity",
     "blacklist_lead",
     "entry_from_row",
+    "find_entries",
     "find_entry",
     "get_entry",
     "guard_identity",
@@ -145,6 +147,37 @@ def guard_identity(
         )
 
 
+def find_entries(
+    conn: sqlite3.Connection,
+    account_id: int,
+    *,
+    member_id: str | None = None,
+    public_id: str | None = None,
+) -> list[BlacklistEntry]:
+    """Return every entry the account holds for the identity, oldest first.
+
+    One identity can span several rows: blacklisting a lead known only by
+    member id and separately blacklisting a public id leaves two partial rows
+    that a later call carrying both identifiers matches at once.
+    """
+    member_id = normalise_identifier(member_id)
+    public_id = normalise_identifier(public_id)
+    if member_id is None and public_id is None:
+        return []
+
+    rows = conn.execute(
+        """
+        SELECT *
+        FROM blacklist
+        WHERE account_id = ?
+          AND ((? IS NOT NULL AND member_id = ?) OR (? IS NOT NULL AND public_id = ?))
+        ORDER BY id
+        """,
+        (account_id, member_id, member_id, public_id, public_id),
+    ).fetchall()
+    return [entry_from_row(row) for row in rows]
+
+
 def find_entry(
     conn: sqlite3.Connection,
     account_id: int,
@@ -152,23 +185,14 @@ def find_entry(
     member_id: str | None = None,
     public_id: str | None = None,
 ) -> BlacklistEntry | None:
-    """Return the entry an account already holds for the identity, if any."""
-    member_id = normalise_identifier(member_id)
-    public_id = normalise_identifier(public_id)
-    if member_id is None and public_id is None:
-        return None
-
-    row = conn.execute(
-        """
-        SELECT *
-        FROM blacklist
-        WHERE account_id = ?
-          AND ((? IS NOT NULL AND member_id = ?) OR (? IS NOT NULL AND public_id = ?))
-        LIMIT 1
-        """,
-        (account_id, member_id, member_id, public_id, public_id),
-    ).fetchone()
-    return None if row is None else entry_from_row(row)
+    """Return the oldest entry an account holds for the identity, if any."""
+    entries = find_entries(
+        conn,
+        account_id,
+        member_id=member_id,
+        public_id=public_id,
+    )
+    return entries[0] if entries else None
 
 
 def get_entry(conn: sqlite3.Connection, entry_id: int) -> BlacklistEntry:
@@ -176,6 +200,61 @@ def get_entry(conn: sqlite3.Connection, entry_id: int) -> BlacklistEntry:
     if row is None:
         raise LookupError(f"blacklist entry {entry_id} does not exist")
     return entry_from_row(row)
+
+
+def _first_not_none(values: Iterable[str | None]) -> str | None:
+    for value in values:
+        if value is not None:
+            return value
+    return None
+
+
+def _consolidate_entries(
+    conn: sqlite3.Connection,
+    entries: Sequence[BlacklistEntry],
+    *,
+    member_id: str | None,
+    public_id: str | None,
+    reason: str | None,
+) -> BlacklistEntry:
+    """Fold the matched entries into the oldest row and return it.
+
+    Merging rather than updating in place matters because writing both
+    identifiers onto one partial row while a sibling row still holds one of them
+    breaks UNIQUE (account_id, public_id). Stored identifiers win over the
+    supplied ones, so an entry never loses coverage it already had.
+    """
+    survivor = entries[0]
+    merged_member_id = _first_not_none(
+        [entry.member_id for entry in entries] + [member_id]
+    )
+    merged_public_id = _first_not_none(
+        [entry.public_id for entry in entries] + [public_id]
+    )
+    merged_reason = reason or _first_not_none([entry.reason for entry in entries])
+    redundant = [entry.id for entry in entries[1:]]
+
+    try:
+        if redundant:
+            placeholders = ", ".join("?" for _ in redundant)
+            conn.execute(
+                f"DELETE FROM blacklist WHERE id IN ({placeholders})",
+                redundant,
+            )
+        conn.execute(
+            """
+            UPDATE blacklist
+            SET member_id = ?, public_id = ?, reason = ?
+            WHERE id = ?
+            """,
+            (merged_member_id, merged_public_id, merged_reason, survivor.id),
+        )
+    except Exception:
+        conn.rollback()
+        raise
+
+    conn.commit()
+    return get_entry(conn, survivor.id)
 
 
 def blacklist_identity(
@@ -186,7 +265,12 @@ def blacklist_identity(
     public_id: str | None = None,
     reason: str | None = None,
 ) -> BlacklistEntry:
-    """Blacklist a LinkedIn identity that may not exist as a lead yet."""
+    """Blacklist a LinkedIn identity that may not exist as a lead yet.
+
+    Repeat calls are idempotent per account. Supplying an identifier the account
+    already blacklisted under a separate row merges those rows into one entry,
+    so the account never ends up with two partial records of the same person.
+    """
     member_id = normalise_identifier(member_id)
     public_id = normalise_identifier(public_id)
     if member_id is None and public_id is None:
@@ -195,20 +279,15 @@ def blacklist_identity(
             "enforceable across accounts"
         )
 
-    existing = find_entry(conn, account_id, member_id=member_id, public_id=public_id)
-    if existing is not None:
-        conn.execute(
-            """
-            UPDATE blacklist
-            SET member_id = COALESCE(member_id, ?),
-                public_id = COALESCE(public_id, ?),
-                reason = COALESCE(?, reason)
-            WHERE id = ?
-            """,
-            (member_id, public_id, reason, existing.id),
+    matches = find_entries(conn, account_id, member_id=member_id, public_id=public_id)
+    if matches:
+        return _consolidate_entries(
+            conn,
+            matches,
+            member_id=member_id,
+            public_id=public_id,
+            reason=reason,
         )
-        conn.commit()
-        return get_entry(conn, existing.id)
 
     cursor = conn.execute(
         """

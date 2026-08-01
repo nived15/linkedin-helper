@@ -230,6 +230,55 @@ def test_blacklist_entries_are_idempotent_per_account(conn, accounts):
     assert len(list_blacklist(conn)) == 2
 
 
+def test_partial_entries_merge_instead_of_breaking_the_unique_constraint(conn, accounts):
+    account_a, _ = accounts
+    by_member = blacklist_identity(conn, account_a, member_id="A", reason="r1")
+    by_public = blacklist_identity(conn, account_a, public_id="p", reason="r2")
+
+    assert by_member.id != by_public.id
+    assert len(list_blacklist(conn, account_a)) == 2
+
+    merged = blacklist_identity(
+        conn,
+        account_a,
+        member_id="A",
+        public_id="p",
+        reason="r3",
+    )
+
+    assert merged.id == by_member.id
+    assert merged.member_id == "A"
+    assert merged.public_id == "p"
+    assert merged.reason == "r3"
+    assert is_blacklisted_by_member_id(conn, "A") is True
+    assert is_blacklisted_by_public_id(conn, "p") is True
+    assert len(list_blacklist(conn)) == 1
+
+
+def test_merging_partial_entries_keeps_removal_honest(conn, accounts):
+    account_a, account_b = accounts
+    lead = create_lead(conn, account_b, "Merged Person", member_id="A", public_id="p")
+    blacklist_identity(conn, account_a, member_id="A")
+    blacklist_identity(conn, account_a, public_id="p")
+    blacklist_identity(conn, account_a, member_id="A", public_id="p")
+
+    assert is_blacklisted(conn, account_b, lead.id) is True
+    assert remove_from_blacklist(conn, member_id="A") == 1
+    assert is_blacklisted(conn, account_b, lead.id) is False
+    assert is_blacklisted_by_public_id(conn, "p") is False
+    assert list_blacklist(conn) == []
+
+
+def test_merging_never_drops_an_identifier_the_account_already_held(conn, accounts):
+    account_a, _ = accounts
+    blacklist_identity(conn, account_a, member_id="A", public_id="old-vanity")
+
+    merged = blacklist_identity(conn, account_a, member_id="A", public_id="new-vanity")
+
+    assert merged.public_id == "old-vanity"
+    assert is_blacklisted_by_public_id(conn, "old-vanity") is True
+
+
 def test_blacklist_requires_a_durable_identifier(conn, accounts):
     account_a, _ = accounts
     anonymous = create_lead(conn, account_a, "No Identifiers")
