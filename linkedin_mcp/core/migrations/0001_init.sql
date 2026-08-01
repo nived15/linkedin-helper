@@ -136,16 +136,6 @@ CREATE TABLE IF NOT EXISTS safety_events (
     FOREIGN KEY (account_id) REFERENCES accounts (id) ON DELETE CASCADE
 );
 
-CREATE TABLE IF NOT EXISTS worker_heartbeat (
-    worker_id TEXT PRIMARY KEY,
-    account_id INTEGER NOT NULL,
-    last_tick_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    status TEXT NOT NULL,
-    current_job_id INTEGER,
-    FOREIGN KEY (account_id) REFERENCES accounts (id) ON DELETE CASCADE,
-    FOREIGN KEY (current_job_id) REFERENCES jobs (id) ON DELETE SET NULL
-);
-
 CREATE TABLE IF NOT EXISTS lead_contacts (
     lead_id INTEGER NOT NULL,
     kind TEXT NOT NULL CHECK (kind IN ('email', 'work_email', 'personal_email', 'phone', 'website', 'twitter')),
@@ -253,6 +243,16 @@ CREATE TABLE IF NOT EXISTS jobs (
     FOREIGN KEY (campaign_id) REFERENCES campaigns (id) ON DELETE SET NULL,
     FOREIGN KEY (lead_id) REFERENCES leads (id) ON DELETE SET NULL,
     FOREIGN KEY (step_id) REFERENCES campaign_steps (id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS worker_heartbeat (
+    worker_id TEXT PRIMARY KEY,
+    account_id INTEGER NOT NULL,
+    last_tick_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    status TEXT NOT NULL,
+    current_job_id INTEGER,
+    FOREIGN KEY (account_id) REFERENCES accounts (id) ON DELETE CASCADE,
+    FOREIGN KEY (current_job_id) REFERENCES jobs (id) ON DELETE SET NULL
 );
 
 CREATE TABLE IF NOT EXISTS ai_drafts (
