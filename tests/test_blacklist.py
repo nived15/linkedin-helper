@@ -279,6 +279,57 @@ def test_merging_never_drops_an_identifier_the_account_already_held(conn, accoun
     assert is_blacklisted_by_public_id(conn, "old-vanity") is True
 
 
+def test_conflicting_matches_are_left_alone_instead_of_merged(conn, accounts):
+    account_a, _ = accounts
+    recycled = blacklist_identity(conn, account_a, member_id="B", public_id="p")
+    blacklist_identity(conn, account_a, member_id="A")
+
+    returned = blacklist_identity(conn, account_a, member_id="A", public_id="p")
+
+    assert returned.id == recycled.id
+    assert is_blacklisted_by_member_id(conn, "A") is True
+    assert is_blacklisted_by_member_id(conn, "B") is True
+    assert is_blacklisted_by_public_id(conn, "p") is True
+    assert [
+        (entry.member_id, entry.public_id) for entry in list_blacklist(conn)
+    ] == [("B", "p"), ("A", None)]
+
+
+def test_conflicting_matches_are_left_alone_whatever_the_row_order(conn, accounts):
+    account_a, _ = accounts
+    first = blacklist_identity(conn, account_a, member_id="A")
+    blacklist_identity(conn, account_a, member_id="B", public_id="p")
+
+    returned = blacklist_identity(conn, account_a, member_id="A", public_id="p")
+
+    assert returned.id == first.id
+    assert is_blacklisted_by_member_id(conn, "A") is True
+    assert is_blacklisted_by_member_id(conn, "B") is True
+    assert is_blacklisted_by_public_id(conn, "p") is True
+    assert [
+        (entry.member_id, entry.public_id) for entry in list_blacklist(conn)
+    ] == [("A", None), ("B", "p")]
+
+
+def test_a_conflicting_call_can_still_supply_a_missing_reason(conn, accounts):
+    account_a, _ = accounts
+    blacklist_identity(conn, account_a, member_id="B", public_id="p")
+    blacklist_identity(conn, account_a, member_id="A", reason="asked to stop")
+
+    returned = blacklist_identity(
+        conn,
+        account_a,
+        member_id="A",
+        public_id="p",
+        reason="recycled vanity url",
+    )
+
+    kept = {entry.member_id: entry.reason for entry in list_blacklist(conn)}
+
+    assert returned.reason == "recycled vanity url"
+    assert kept == {"A": "asked to stop", "B": "recycled vanity url"}
+
+
 def test_blacklist_requires_a_durable_identifier(conn, accounts):
     account_a, _ = accounts
     anonymous = create_lead(conn, account_a, "No Identifiers")

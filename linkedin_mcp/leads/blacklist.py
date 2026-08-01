@@ -209,6 +209,26 @@ def _first_not_none(values: Iterable[str | None]) -> str | None:
     return None
 
 
+def _distinct(values: Iterable[str | None]) -> set[str]:
+    return {value for value in values if value is not None}
+
+
+def _fill_missing_reason(
+    conn: sqlite3.Connection,
+    entry: BlacklistEntry,
+    reason: str | None,
+) -> BlacklistEntry:
+    if reason is None or entry.reason is not None:
+        return entry
+
+    conn.execute(
+        "UPDATE blacklist SET reason = ? WHERE id = ?",
+        (reason, entry.id),
+    )
+    conn.commit()
+    return get_entry(conn, entry.id)
+
+
 def _consolidate_entries(
     conn: sqlite3.Connection,
     entries: Sequence[BlacklistEntry],
@@ -217,20 +237,29 @@ def _consolidate_entries(
     public_id: str | None,
     reason: str | None,
 ) -> BlacklistEntry:
-    """Fold the matched entries into the oldest row and return it.
+    """Fold compatible matched entries into the oldest row and return it.
 
-    Merging rather than updating in place matters because writing both
-    identifiers onto one partial row while a sibling row still holds one of them
-    breaks UNIQUE (account_id, public_id). Stored identifiers win over the
-    supplied ones, so an entry never loses coverage it already had.
+    One call can match two rows when an account blacklisted a person by member
+    id and, separately, blacklisted a public id that turns out to belong to the
+    same person. Folding those rows together keeps one record per person, which
+    is what lets a single remove_from_blacklist call clear them.
+
+    Rows are only folded when their identifiers agree. LinkedIn recycles vanity
+    URLs, so matched rows can just as easily describe two different people, and
+    merging those would delete an identifier that is on the list and silently
+    make someone contactable again. When the matched rows disagree, every row is
+    left exactly as it is and the oldest match is returned. The supplied
+    identity stays blocked either way, because it matched a row to begin with.
     """
     survivor = entries[0]
-    merged_member_id = _first_not_none(
-        [entry.member_id for entry in entries] + [member_id]
-    )
-    merged_public_id = _first_not_none(
-        [entry.public_id for entry in entries] + [public_id]
-    )
+    member_values = _distinct([entry.member_id for entry in entries] + [member_id])
+    public_values = _distinct([entry.public_id for entry in entries] + [public_id])
+
+    if len(member_values) > 1 or len(public_values) > 1:
+        return _fill_missing_reason(conn, survivor, reason)
+
+    merged_member_id = next(iter(member_values), None)
+    merged_public_id = next(iter(public_values), None)
     merged_reason = reason or _first_not_none([entry.reason for entry in entries])
     redundant = [entry.id for entry in entries[1:]]
 
@@ -268,8 +297,10 @@ def blacklist_identity(
     """Blacklist a LinkedIn identity that may not exist as a lead yet.
 
     Repeat calls are idempotent per account. Supplying an identifier the account
-    already blacklisted under a separate row merges those rows into one entry,
-    so the account never ends up with two partial records of the same person.
+    already blacklisted under a separate row merges those rows into one entry
+    when their identifiers agree, so the account never ends up with two partial
+    records of the same person. Rows that disagree are left untouched, since a
+    recycled vanity URL can make one call match two different people.
     """
     member_id = normalise_identifier(member_id)
     public_id = normalise_identifier(public_id)
