@@ -3,7 +3,12 @@
 from __future__ import annotations
 
 
-__all__ = ["LeadBlacklistedError", "LeadNotFoundError", "LeadStoreError"]
+__all__ = [
+    "LeadBlacklistedError",
+    "LeadIdentityConflictError",
+    "LeadNotFoundError",
+    "LeadStoreError",
+]
 
 
 class LeadStoreError(RuntimeError):
@@ -44,3 +49,27 @@ class LeadBlacklistedError(LeadStoreError):
         self.lead_id = lead_id
         self.member_id = member_id
         self.public_id = public_id
+
+
+class LeadIdentityConflictError(LeadStoreError):
+    """Raised when an incoming identity cannot be resolved to exactly one lead.
+
+    Deduplication refuses rather than guesses here: resolving the collision
+    either way would delete an identifier the database already holds, or fold
+    two people into one row.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        kind: str,
+        value: str | None = None,
+        lead_id: int | None = None,
+        other_lead_id: int | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.kind = kind
+        self.value = value
+        self.lead_id = lead_id
+        self.other_lead_id = other_lead_id

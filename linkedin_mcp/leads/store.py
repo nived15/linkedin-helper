@@ -4,7 +4,9 @@ Built directly on the DB-01 schema. Audience reads exclude blacklisted leads by
 default so a caller cannot contact one by forgetting to check, and writes that
 would create or refresh a blacklisted lead are refused outright.
 
-Deduplication is deliberately out of scope here; that belongs to DB-03.
+Writes here address one known lead row. Resolving a harvested profile onto an
+existing row, merging its fields and honouring the section cache windows is
+:mod:`linkedin_mcp.leads.dedupe`.
 """
 
 from __future__ import annotations
@@ -13,6 +15,7 @@ import json
 import sqlite3
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
+from types import MappingProxyType
 from typing import Any
 
 from linkedin_mcp.leads.blacklist import (
@@ -24,7 +27,9 @@ from linkedin_mcp.leads.errors import LeadNotFoundError
 
 
 __all__ = [
+    "COLUMN_FIELDS",
     "CUSTOM_FIELD_PREFIX",
+    "FIELD_COLUMNS",
     "IDENTITY_FIELDS",
     "LEAD_COLUMNS",
     "WRITABLE_FIELDS",
@@ -43,7 +48,9 @@ __all__ = [
     "leads_from_rows",
     "list_leads",
     "normalise_custom_field_key",
+    "normalise_lead_fields",
     "placeholders_for",
+    "require_full_name",
     "set_custom_field",
     "set_custom_fields",
     "update_lead",
@@ -73,6 +80,8 @@ LEAD_COLUMNS: tuple[str, ...] = (
     "avatar_url",
     "first_seen_at",
     "last_visited_at",
+    "contact_info_fetched_at",
+    "positions_fetched_at",
 )
 
 IDENTITY_FIELDS: frozenset[str] = frozenset({"member_id", "public_id", "hash_id"})
@@ -103,6 +112,11 @@ WRITABLE_FIELDS: frozenset[str] = frozenset(
 _FIELD_COLUMNS: dict[str, str] = {name: name for name in WRITABLE_FIELDS}
 _FIELD_COLUMNS["badges"] = "badges_json"
 
+FIELD_COLUMNS: Mapping[str, str] = MappingProxyType(_FIELD_COLUMNS)
+COLUMN_FIELDS: Mapping[str, str] = MappingProxyType(
+    {column: name for name, column in _FIELD_COLUMNS.items()}
+)
+
 
 @dataclass(frozen=True, slots=True)
 class Lead:
@@ -127,6 +141,8 @@ class Lead:
     avatar_url: str | None = None
     first_seen_at: str | None = None
     last_visited_at: str | None = None
+    contact_info_fetched_at: str | None = None
+    positions_fetched_at: str | None = None
 
 
 def lead_from_row(row: sqlite3.Row) -> Lead:
@@ -155,10 +171,17 @@ def lead_from_row(row: sqlite3.Row) -> Lead:
         avatar_url=row["avatar_url"],
         first_seen_at=row["first_seen_at"],
         last_visited_at=row["last_visited_at"],
+        contact_info_fetched_at=row["contact_info_fetched_at"],
+        positions_fetched_at=row["positions_fetched_at"],
     )
 
 
-def _validated_fields(fields: Mapping[str, Any]) -> dict[str, Any]:
+def normalise_lead_fields(fields: Mapping[str, Any]) -> dict[str, Any]:
+    """Validate writable lead fields and key them by their storage column.
+
+    Identifiers are trimmed and badges are serialised here, so every writer in
+    the package normalises a harvested profile the same way.
+    """
     unknown = sorted(set(fields) - WRITABLE_FIELDS)
     if unknown:
         raise ValueError(f"unknown lead fields: {', '.join(unknown)}")
@@ -173,7 +196,8 @@ def _validated_fields(fields: Mapping[str, Any]) -> dict[str, Any]:
     return payload
 
 
-def _require_full_name(full_name: str) -> str:
+def require_full_name(full_name: str) -> str:
+    """Return the trimmed name, rejecting a lead that would have no label."""
     cleaned = (full_name or "").strip()
     if not cleaned:
         raise ValueError("full_name is required")
@@ -192,8 +216,8 @@ def create_lead(
     ``member_id`` or ``public_id`` sits on the global blacklist raises
     :class:`LeadBlacklistedError`, on every account.
     """
-    payload = _validated_fields(fields)
-    payload["full_name"] = _require_full_name(full_name)
+    payload = normalise_lead_fields(fields)
+    payload["full_name"] = require_full_name(full_name)
     guard_identity(
         conn,
         member_id=payload.get("member_id"),
@@ -256,9 +280,9 @@ def update_lead(conn: sqlite3.Connection, lead_id: int, **fields: Any) -> Lead:
     if current is None:
         raise LeadNotFoundError(lead_id)
 
-    payload = _validated_fields(fields)
+    payload = normalise_lead_fields(fields)
     if "full_name" in payload:
-        payload["full_name"] = _require_full_name(payload["full_name"])
+        payload["full_name"] = require_full_name(payload["full_name"])
     if not payload:
         return lead_from_row(current)
 
