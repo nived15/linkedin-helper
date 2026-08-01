@@ -122,9 +122,25 @@ def session_cookie_path(platform: str, account_seed: str | None = None) -> Path:
     return SESSIONS_DIR / f"{platform}_{account_session_suffix(platform, account_seed)}_cookies.json"
 
 
+def resolve_account_seed(platform: str, account_seed: str | None = None) -> str:
+    """Resolve seed source used to isolate per-account artifacts."""
+    if account_seed and account_seed.strip():
+        return account_seed.strip()
+
+    env_seed = os.getenv(f"{platform.upper()}_USERNAME", "").strip()
+    if env_seed:
+        return env_seed
+
+    logger.warning(
+        "No account seed configured for %s; using shared platform seed for persisted session artifacts.",
+        platform,
+    )
+    return platform
+
+
 def account_session_suffix(platform: str, account_seed: str | None = None) -> str:
     """Return a stable per-account suffix for persisted session artifacts."""
-    seed_source = account_seed or os.getenv(f"{platform.upper()}_USERNAME", "").strip() or platform
+    seed_source = resolve_account_seed(platform, account_seed)
     return hashlib.sha256(seed_source.encode("utf-8")).hexdigest()[:12]
 
 
@@ -339,18 +355,18 @@ class PlaywrightChromiumDriver:
         if self.context:
             try:
                 await self.context.close()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("Error closing persistent browser context: %s", exc)
         if self.browser:
             try:
                 await self.browser.close()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("Error closing browser: %s", exc)
         if self.playwright:
             try:
                 await self.playwright.stop()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("Error stopping Playwright: %s", exc)
         self.browser = None
         self.playwright = None
         self.context = None
