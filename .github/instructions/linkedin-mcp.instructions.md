@@ -13,9 +13,11 @@ applyTo: "**/*.py"
 
 ## Rate Limiting
 
-- Add `await asyncio.sleep(random.uniform(10, 60))` between consecutive LinkedIn actions (likes, comments, connection requests).
-- Never exceed 50 actions per hour or 100 connection requests per week.
-- Log every action with a timestamp so rate limits can be verified from `data/` files.
+- Caps are enforced in code, never by prose or by an LLM. Call `guard_action(...)` from `linkedin_mcp.safety` at the top of every action tool, before a browser is opened, and return its result when it refuses.
+- Never write a cap into a tool. `HARD_CEILINGS` in `linkedin_mcp/core/config.py` is the only place a ceiling is set, and `account_limits` rows may only tighten it.
+- Never store a usage counter. Every count is a `COUNT(*)` over `actions_log` through `linkedin_mcp.audit`, which is append-only.
+- Never sleep directly. Pacing between actions routes through `linkedin_mcp.browser.humanize`, so `await cooldown()` rather than `asyncio.sleep(...)`.
+- A refusal is an ordinary tool result carrying a typed `RefusalReason`, and the gate has already written it to `actions_log`. Do not raise, and do not log it a second time.
 
 ## Browser Automation
 

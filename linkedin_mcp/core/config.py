@@ -1,0 +1,207 @@
+"""Hard safety ceilings for every metered LinkedIn action.
+
+These numbers are the last word. `account_limits` rows may tighten any of them,
+which is what a cautious operator or a warming account wants, but nothing
+loosens them: `linkedin_mcp.safety.limits` clamps every configured cap against
+the ceiling here before a `SafetyGate` grants a lease. An MCP tool therefore
+cannot talk its way past a ceiling by writing a bigger number into the database,
+and an LLM driving the tools cannot raise one at all.
+
+The defaults come from the two places the caps used to live as prose: the
+roadmap (30 invites/day, 100/week, 150 actions/day, 40 direct profile loads/day)
+and `.github/copilot-instructions.md` (50 actions/hour).
+"""
+
+from __future__ import annotations
+
+from collections.abc import Mapping
+from dataclasses import dataclass
+from types import MappingProxyType
+
+__all__ = [
+    "APPROVAL_REQUIRED_ACTIONS",
+    "ActionCeiling",
+    "CONNECTION_ACCEPTED_ACTION",
+    "DEDUPE_WINDOW_DAYS",
+    "DEFAULT_CEILING",
+    "GLOBAL_DAILY_CEILING",
+    "GLOBAL_HOURLY_CEILING",
+    "HARD_CEILINGS",
+    "INVITE_ACTION",
+    "JITTER_MAX_SHRINK",
+    "METERED_ACTIONS",
+    "PENDING_INVITE_CEILING",
+    "PENDING_INVITE_WINDOW_DAYS",
+    "PROFILE_VIEW_ACTION",
+    "PROFILE_VIEW_DIRECT_ACTION",
+    "RAMP_UP_DAYS",
+    "RAMP_UP_START_FRACTION",
+    "UNMETERED_ACTIONS",
+    "ceiling_for",
+    "dedupe_window_days",
+    "is_metered",
+    "profile_view_action",
+]
+
+
+@dataclass(frozen=True, slots=True)
+class ActionCeiling:
+    """The most one action type may ever run, per rolling window."""
+
+    daily: int
+    weekly: int | None = None
+    hourly: int | None = None
+
+    def __post_init__(self) -> None:
+        if self.daily < 0:
+            raise ValueError(f"daily ceiling must be >= 0, got {self.daily}")
+        for name in ("weekly", "hourly"):
+            value = getattr(self, name)
+            if value is not None and value < 0:
+                raise ValueError(f"{name} ceiling must be >= 0, got {value}")
+        if self.weekly is not None and self.weekly < self.daily:
+            raise ValueError(
+                f"weekly ceiling {self.weekly} is below the daily ceiling {self.daily}, "
+                "which would make the daily number unreachable"
+            )
+
+    def clamp_daily(self, requested: int | None) -> int:
+        """Return the configured daily cap, never above the ceiling."""
+        return self.daily if requested is None else max(0, min(int(requested), self.daily))
+
+    def clamp_weekly(self, requested: int | None) -> int | None:
+        """Return the configured weekly cap, never above the ceiling."""
+        if requested is None:
+            return self.weekly
+        bounded = max(0, int(requested))
+        return bounded if self.weekly is None else min(bounded, self.weekly)
+
+    def clamp_hourly(self, requested: int | None) -> int | None:
+        """Return the configured hourly cap, never above the ceiling."""
+        if requested is None:
+            return self.hourly
+        bounded = max(0, int(requested))
+        return bounded if self.hourly is None else min(bounded, self.hourly)
+
+
+INVITE_ACTION = "connection_request"
+CONNECTION_ACCEPTED_ACTION = "connection_accepted"
+PROFILE_VIEW_ACTION = "profile_view"
+PROFILE_VIEW_DIRECT_ACTION = "profile_view_direct"
+
+GLOBAL_DAILY_CEILING = 150
+"""Every metered action an account may take in any rolling 24 hours."""
+
+GLOBAL_HOURLY_CEILING = 50
+"""Every metered action an account may take in any rolling hour."""
+
+PENDING_INVITE_CEILING = 400
+"""Outstanding invitations allowed before the gate stops sending new ones."""
+
+PENDING_INVITE_WINDOW_DAYS = 21
+"""How far back an unanswered invitation still counts as pending."""
+
+JITTER_MAX_SHRINK = 0.10
+"""Largest slice a day's deterministic jitter may take off a cap."""
+
+RAMP_UP_DAYS = 14
+"""Days a fresh account takes to earn its full caps.
+
+Warm-up is counted from `accounts.account_age_days`, whose schema default of
+zero means the age was never recorded. Zero therefore reads as an established
+account; a genuinely new one is registered with an age of one on its first day.
+"""
+
+RAMP_UP_START_FRACTION = 0.2
+"""Share of the cap an account gets on the first day of its warm-up."""
+
+HARD_CEILINGS: Mapping[str, ActionCeiling] = MappingProxyType(
+    {
+        INVITE_ACTION: ActionCeiling(daily=30, weekly=100),
+        "message": ActionCeiling(daily=50, weekly=250),
+        PROFILE_VIEW_ACTION: ActionCeiling(daily=100),
+        PROFILE_VIEW_DIRECT_ACTION: ActionCeiling(daily=40),
+        "profile_search": ActionCeiling(daily=50),
+        "post_search": ActionCeiling(daily=50),
+        "feed_browse": ActionCeiling(daily=40),
+        "post_read": ActionCeiling(daily=100),
+        "post_like": ActionCeiling(daily=60),
+        "post_comment": ActionCeiling(daily=40),
+        "post_share": ActionCeiling(daily=10),
+    }
+)
+
+DEFAULT_CEILING = ActionCeiling(daily=50)
+"""Ceiling for an action type nobody has configured yet, so new tools start safe."""
+
+METERED_ACTIONS: frozenset[str] = frozenset(HARD_CEILINGS)
+"""Action types that consume the global daily and hourly budgets."""
+
+UNMETERED_ACTIONS: frozenset[str] = frozenset(
+    {
+        "login",
+        "login_secure",
+        "browser_close",
+        "post_comment_batch",
+        CONNECTION_ACCEPTED_ACTION,
+    }
+)
+"""Bookkeeping that reaches LinkedIn but is not an outreach action.
+
+Logging in cannot be rate limited without deadlocking recovery, closing the
+browser touches nobody, a batch wrapper is metered through the individual
+comments it posts, and an accepted invitation is something the other person did.
+"""
+
+APPROVAL_REQUIRED_ACTIONS: frozenset[str] = frozenset(
+    {INVITE_ACTION, "message", "post_comment", "post_share"}
+)
+"""Actions the gate refuses unless its caller asserts a human signed them off.
+
+The gate enforces the flag it is handed; it cannot see into a caller's head.
+The single-shot MCP tools assert approval at the call site because an agent only
+reaches them on Nived's direct instruction, after the content was staged for
+review. The value of the check is the unattended path: SEQ-04's campaign runner
+passes the campaign's real `approval_mode`, so a sequence that was never
+approved refuses here instead of quietly inviting people overnight.
+"""
+
+DEDUPE_WINDOW_DAYS: Mapping[str, int] = MappingProxyType(
+    {
+        INVITE_ACTION: 90,
+        "message": 7,
+        "post_like": 30,
+        "post_comment": 30,
+        "post_share": 30,
+    }
+)
+"""How long the same action against the same lead counts as a duplicate.
+
+Action types absent from this mapping are never deduplicated, because repeating
+them is harmless: viewing a profile twice in a week is normal behaviour.
+"""
+
+
+def ceiling_for(action_type: str) -> ActionCeiling:
+    """Return the ceiling for an action type, falling back to a safe default."""
+    return HARD_CEILINGS.get(action_type, DEFAULT_CEILING)
+
+
+def is_metered(action_type: str) -> bool:
+    """Return True when the action consumes budget."""
+    return action_type not in UNMETERED_ACTIONS
+
+
+def dedupe_window_days(action_type: str) -> int | None:
+    """Return the dedupe window in days, or None when repeats are allowed."""
+    return DEDUPE_WINDOW_DAYS.get(action_type)
+
+
+def profile_view_action(direct: bool) -> str:
+    """Return the action type a profile load consumes.
+
+    Loading a profile URL straight from the address bar is the pattern LinkedIn
+    throttles hardest, so it gets its own much smaller budget than a view
+    reached by navigating through the site.
+    """
+    return PROFILE_VIEW_DIRECT_ACTION if direct else PROFILE_VIEW_ACTION
