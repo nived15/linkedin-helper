@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SESSIONS_DIR = REPO_ROOT / "sessions"
 ENV_PATH = REPO_ROOT / ".env"
+SESSION_COOKIE_TTL_SECONDS = 86400
 
 
 @dataclass(frozen=True)
@@ -77,8 +78,8 @@ FINGERPRINT_CATALOG: tuple[FingerprintProfile, ...] = (
 def setup_sessions_directory() -> bool:
     """Set up the sessions directory with proper permissions."""
     try:
-        SESSIONS_DIR.mkdir(mode=0o777, parents=True, exist_ok=True)
-        os.chmod(SESSIONS_DIR, 0o777)
+        SESSIONS_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
+        os.chmod(SESSIONS_DIR, 0o700)
         logger.debug("Sessions directory set up at %s with full permissions", SESSIONS_DIR)
         return True
     except Exception as exc:
@@ -180,7 +181,7 @@ async def save_cookies(page, platform):
         cookie_file = session_cookie_path(platform)
         with open(cookie_file, "wb") as cookie_handle:
             cookie_handle.write(encrypted_data)
-        os.chmod(cookie_file, 0o666)
+        os.chmod(cookie_file, 0o600)
     except Exception as exc:
         raise Exception(f"Failed to save cookies: {exc}")
 
@@ -197,7 +198,7 @@ async def load_cookies(context, platform):
             return False
 
         cookie_data = json.loads(Fernet(key).decrypt(encrypted_data))
-        if int(time.time()) - cookie_data["timestamp"] > 86400:
+        if int(time.time()) - cookie_data["timestamp"] > SESSION_COOKIE_TTL_SECONDS:
             cookie_file.unlink(missing_ok=True)
             return False
 

@@ -15,7 +15,7 @@ from linkedin_browser_mcp import (
     interact_with_linkedin_post
 )
 from linkedin_mcp.browser.selectors import selector_fallbacks
-from linkedin_mcp.browser.session import build_fingerprint_profile
+from linkedin_mcp.browser.session import FINGERPRINT_CATALOG, build_fingerprint_profile
 
 class MockContext:
     def info(self, message):
@@ -148,6 +148,7 @@ def test_fingerprint_profile_is_stable_per_account():
 
     assert first == second
     assert "Chrome/96.0.4664.110" not in first.user_agent
+    assert first.user_agent in {profile.user_agent for profile in FINGERPRINT_CATALOG}
 
 
 def test_selectors_are_centralized_in_browser_module():
@@ -156,6 +157,7 @@ def test_selectors_are_centralized_in_browser_module():
     assert "Chrome/96.0.4664.110" not in source
     assert ".pv-top-card" not in source
     assert ".feed-shared-update-v2" not in source
+    assert "selector_fallbacks" in source
     assert selector_fallbacks("feed_post_container")[0] == '[data-urn*="urn:li:activity"]'
 
 @pytest.mark.asyncio
