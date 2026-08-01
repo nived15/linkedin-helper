@@ -1,3 +1,5 @@
+-- Timestamp columns in this schema use UTC text values compatible with SQLite CURRENT_TIMESTAMP.
+
 CREATE TABLE IF NOT EXISTS accounts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     label TEXT NOT NULL,
@@ -215,7 +217,6 @@ CREATE TABLE IF NOT EXISTS campaign_leads (
     lead_id INTEGER NOT NULL,
     current_step_ord INTEGER NOT NULL,
     sublist TEXT NOT NULL CHECK (sublist IN ('queue', 'processing', 'successful', 'failed', 'replied', 'skipped', 'excluded')),
-    -- Stored as an ISO 8601 UTC timestamp string when populated by application code.
     next_run_at TEXT,
     attempts INTEGER NOT NULL DEFAULT 0,
     last_outcome TEXT,

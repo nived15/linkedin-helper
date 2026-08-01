@@ -59,7 +59,7 @@ def test_initialize_database_applies_full_schema(tmp_path):
     assert versions == ["0001_init"]
 
 
-def test_migrate_is_idempotent_on_rerun(tmp_path):
+def test_initialize_database_is_idempotent_on_rerun(tmp_path):
     db_path = tmp_path / "linkedin-helper.db"
 
     first_conn = initialize_database(db_path)

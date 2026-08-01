@@ -6,6 +6,7 @@ from pathlib import Path
 
 DEFAULT_DB_PATH = Path(__file__).resolve().parents[2] / "data" / "linkedin-helper.db"
 MIGRATIONS_DIR = Path(__file__).resolve().parent / "migrations"
+MIGRATION_PATTERN = "[0-9][0-9][0-9][0-9]_*.sql"
 
 
 def connect(db_path: str | Path = DEFAULT_DB_PATH) -> sqlite3.Connection:
@@ -27,7 +28,7 @@ def connect(db_path: str | Path = DEFAULT_DB_PATH) -> sqlite3.Connection:
 
 def migration_files(migrations_dir: str | Path = MIGRATIONS_DIR) -> list[Path]:
     """Return migration files sorted by version."""
-    return sorted(Path(migrations_dir).glob("[0-9][0-9][0-9][0-9]_*.sql"))
+    return sorted(Path(migrations_dir).glob(MIGRATION_PATTERN))
 
 
 def ensure_schema_migrations_table(conn: sqlite3.Connection) -> None:
@@ -56,6 +57,8 @@ def split_sql_statements(sql: str) -> list[str]:
 
     trailing = buffer.strip()
     if trailing:
+        if not sqlite3.complete_statement(trailing):
+            raise ValueError("Migration contains an incomplete trailing SQL statement")
         statements.append(trailing)
 
     return statements
