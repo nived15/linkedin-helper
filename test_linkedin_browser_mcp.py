@@ -1,6 +1,7 @@
 import pytest
 import os
 import inspect
+import re
 
 import linkedin_browser_mcp
 from linkedin_browser_mcp import (
@@ -149,6 +150,7 @@ def test_fingerprint_profile_is_stable_per_account():
     assert first == second
     assert "Chrome/96.0.4664.110" not in first.user_agent
     assert first.user_agent in {profile.user_agent for profile in FINGERPRINT_CATALOG}
+    assert re.search(r"Chrome/\d{3}\.\d+\.\d+\.\d+", first.user_agent)
 
 
 def test_selectors_are_centralized_in_browser_module():

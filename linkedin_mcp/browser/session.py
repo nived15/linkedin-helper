@@ -79,7 +79,9 @@ def setup_sessions_directory() -> bool:
     """Set up the sessions directory with proper permissions."""
     try:
         SESSIONS_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
-        os.chmod(SESSIONS_DIR, 0o700)
+        current_mode = SESSIONS_DIR.stat().st_mode & 0o777
+        if current_mode != 0o700:
+            os.chmod(SESSIONS_DIR, 0o700)
         logger.debug("Sessions directory set up at %s with full permissions", SESSIONS_DIR)
         return True
     except Exception as exc:
@@ -198,7 +200,8 @@ async def load_cookies(context, platform):
             return False
 
         cookie_data = json.loads(Fernet(key).decrypt(encrypted_data))
-        if int(time.time()) - cookie_data["timestamp"] > SESSION_COOKIE_TTL_SECONDS:
+        age_seconds = int(time.time()) - cookie_data["timestamp"]
+        if age_seconds > SESSION_COOKIE_TTL_SECONDS:
             cookie_file.unlink(missing_ok=True)
             return False
 
