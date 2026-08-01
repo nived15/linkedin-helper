@@ -264,12 +264,28 @@ def utc_timestamp(moment: datetime | None = None) -> str:
 
 
 def _as_timestamp(value: datetime | str | None) -> str | None:
+    """Return a value rendered in the one format the schema stores.
+
+    Every timestamp reaching a lead column goes through here. The scrape queue
+    compares those columns as text in SQL, so an ISO string kept verbatim would
+    sort against the cutoff on its separator rather than its instant and quietly
+    strand the lead outside the queue forever.
+    """
     if value is None:
         return None
     if isinstance(value, datetime):
         return utc_timestamp(value)
+
     text = str(value).strip()
-    return text or None
+    if not text:
+        return None
+    moment = _parse_timestamp(text)
+    if moment is None:
+        raise ValueError(
+            f"{value!r} is not a timestamp; pass a datetime or a "
+            f"{TIMESTAMP_FORMAT!r} string"
+        )
+    return utc_timestamp(moment)
 
 
 def _parse_timestamp(value: str | None) -> datetime | None:
@@ -281,6 +297,8 @@ def _parse_timestamp(value: str | None) -> datetime | None:
     try:
         parsed = datetime.strptime(text, TIMESTAMP_FORMAT)
     except ValueError:
+        if text.endswith(("Z", "z")):
+            text = f"{text[:-1]}+00:00"
         try:
             parsed = datetime.fromisoformat(text)
         except ValueError:
@@ -357,12 +375,12 @@ def merge_fields(
             continue
 
         if column in MONOTONIC_COLUMNS:
-            incoming_moment = _parse_timestamp(_as_timestamp(value))
-            current_moment = _parse_timestamp(current)
-            if incoming_moment is None:
+            newest = _as_timestamp(value)
+            if newest is None:
                 continue
-            if current_moment is None or incoming_moment > current_moment:
-                changes[column] = _as_timestamp(value)
+            current_moment = _parse_timestamp(current)
+            if current_moment is None or _parse_timestamp(newest) > current_moment:
+                changes[column] = newest
             continue
 
         if column in FILL_WHEN_ABSENT_COLUMNS:
@@ -380,8 +398,8 @@ def merge_fields(
 def _harvest_payload(fields: Mapping[str, Any]) -> dict[str, Any]:
     payload = normalise_lead_fields(fields)
     for column, value in list(payload.items()):
-        if isinstance(value, datetime):
-            payload[column] = utc_timestamp(value)
+        if column in MONOTONIC_COLUMNS or isinstance(value, datetime):
+            payload[column] = _as_timestamp(value)
     if "full_name" in payload:
         name = str(payload["full_name"] or "").strip()
         if name:
@@ -665,8 +683,13 @@ def harvest_leads(
 
     One unusable profile never aborts a run of hundreds: blacklisted and
     ambiguous identities are collected in
-    :attr:`HarvestSummary.refusals` with the reason attached.
+    :attr:`HarvestSummary.refusals` with the reason attached. The run-level
+    arguments are validated up front instead, so a mistyped section raises here
+    rather than turning every profile on the page into a refusal.
     """
+    sections = tuple(normalise_section(section) for section in sections_fetched)
+    stamp = _as_timestamp(fetched_at)
+
     created = 0
     updated = 0
     unchanged = 0
@@ -680,8 +703,8 @@ def harvest_leads(
             result = upsert_lead(
                 conn,
                 account_id,
-                sections_fetched=sections_fetched,
-                fetched_at=fetched_at,
+                sections_fetched=sections,
+                fetched_at=stamp,
                 **profile,
             )
         except (LeadBlacklistedError, LeadIdentityConflictError, ValueError) as error:

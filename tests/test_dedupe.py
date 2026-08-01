@@ -937,6 +937,95 @@ def test_a_profile_repeated_inside_one_run_is_stored_once(conn, account):
     assert duplicate_identifiers(conn, "public_id") == []
 
 
+def test_the_two_freshness_predicates_agree_on_a_non_canonical_timestamp(conn, account):
+    lead = upsert_lead(
+        conn,
+        account,
+        full_name="Ada Lovelace",
+        member_id="urn:li:member:1",
+    ).lead
+    expired = NOW - timedelta(days=CONTACT_INFO_CACHE_DAYS, hours=7)
+
+    mark_section_fetched(conn, lead.id, "contact_info", fetched_at=expired.isoformat())
+
+    assert section_fetched_at(conn, lead.id, "contact_info") == utc_timestamp(expired)
+    assert needs_refresh(conn, lead.id, "contact_info", now=NOW) is True
+    assert [
+        queued.id for queued in leads_needing_refresh(conn, account, "contact_info", now=NOW)
+    ] == [lead.id]
+
+
+@pytest.mark.parametrize(
+    ("supplied", "stored"),
+    [
+        ("2026-08-01 09:00:00", "2026-08-01 09:00:00"),
+        ("2026-08-01T09:00:00", "2026-08-01 09:00:00"),
+        ("2026-08-01T09:00:00Z", "2026-08-01 09:00:00"),
+        ("2026-08-01 14:30:00+05:30", "2026-08-01 09:00:00"),
+        (NOW, "2026-08-01 09:00:00"),
+    ],
+)
+def test_every_accepted_timestamp_spelling_is_stored_as_utc(conn, account, supplied, stored):
+    lead = upsert_lead(
+        conn,
+        account,
+        full_name="Ada Lovelace",
+        member_id="urn:li:member:1",
+        last_visited_at=supplied,
+    ).lead
+
+    assert lead.last_visited_at == stored
+    assert mark_section_fetched(conn, lead.id, "positions", fetched_at=supplied) == stored
+
+
+def test_an_offset_timestamp_is_stored_as_utc(conn, account):
+    lead = upsert_lead(
+        conn,
+        account,
+        full_name="Ada Lovelace",
+        member_id="urn:li:member:1",
+        last_visited_at="2026-08-01 14:30:00+05:30",
+    ).lead
+
+    assert lead.last_visited_at == "2026-08-01 09:00:00"
+
+
+def test_an_unparseable_timestamp_is_rejected(conn, account):
+    lead = upsert_lead(
+        conn,
+        account,
+        full_name="Ada Lovelace",
+        member_id="urn:li:member:1",
+    ).lead
+
+    with pytest.raises(ValueError, match="is not a timestamp"):
+        mark_section_fetched(conn, lead.id, "contact_info", fetched_at="last tuesday")
+
+    assert section_fetched_at(conn, lead.id, "contact_info") is None
+
+
+def test_a_mistyped_section_fails_the_call_not_every_profile(conn, account):
+    with pytest.raises(ValueError, match="unknown lead section"):
+        harvest_leads(conn, account, synthetic_profiles(5), sections_fetched=["contact-info"])
+
+    assert count_leads(conn, account, include_blacklisted=True) == 0
+
+
+def test_harvest_stamps_every_section_it_fetched(conn, account):
+    summary = harvest_leads(
+        conn,
+        account,
+        synthetic_profiles(3),
+        sections_fetched=["positions"],
+        fetched_at=NOW,
+    )
+
+    assert summary.created == 3
+    for lead_id in summary.lead_ids:
+        assert section_fetched_at(conn, lead_id, "positions") == utc_timestamp(NOW)
+        assert needs_refresh(conn, lead_id, "positions", now=NOW) is False
+
+
 def test_harvest_counts_new_versus_updated(conn, account):
     profiles = synthetic_profiles(10)
 
