@@ -1,16 +1,20 @@
-from fastmcp import FastMCP, Context
-from playwright.async_api import async_playwright
 import asyncio
-import os
 import json
-from dotenv import load_dotenv
-from cryptography.fernet import Fernet
-import time
-import random
 import logging
+import os
+import random
 import sys
 from pathlib import Path
 from urllib.parse import quote
+
+from dotenv import load_dotenv
+from fastmcp import Context, FastMCP
+
+from linkedin_mcp.browser.selectors import (
+    selector_fallbacks,
+    selector_payload,
+)
+from linkedin_mcp.browser.session import BrowserSession, load_cookies, save_cookies
 
 # Set up logging to stderr only
 logging.basicConfig(
@@ -21,19 +25,6 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
-
-def setup_sessions_directory():
-    """Set up the sessions directory with proper permissions"""
-    try:
-        sessions_dir = Path(__file__).parent / 'sessions'
-        sessions_dir.mkdir(mode=0o777, parents=True, exist_ok=True)
-        # Ensure the directory has the correct permissions even if it already existed
-        os.chmod(sessions_dir, 0o777)
-        logger.debug(f"Sessions directory set up at {sessions_dir} with full permissions")
-        return True
-    except Exception as e:
-        logger.error(f"Failed to set up sessions directory: {str(e)}")
-        return False
 
 # Load environment variables
 env_path = Path(__file__).parent / '.env'
@@ -73,207 +64,40 @@ def handle_notification(ctx, notification_type, params=None):
     except Exception as e:
         logger.error(f"Error handling notification: {str(e)}")
 
-def get_or_create_encryption_key() -> bytes:
-    """Return the encryption key, generating and persisting one to .env if missing."""
-    key = os.getenv('COOKIE_ENCRYPTION_KEY', '').strip()
-    if key:
-        return key.encode() if isinstance(key, str) else key
-    # Generate a new key and write it back to .env so it persists across runs
-    new_key = Fernet.generate_key()
-    env_path = Path(__file__).parent / '.env'
-    try:
-        existing = env_path.read_text(encoding='utf-8') if env_path.exists() else ''
-        if 'COOKIE_ENCRYPTION_KEY=' in existing:
-            lines = []
-            for line in existing.splitlines():
-                if line.startswith('COOKIE_ENCRYPTION_KEY='):
-                    lines.append(f'COOKIE_ENCRYPTION_KEY={new_key.decode()}')
-                else:
-                    lines.append(line)
-            env_path.write_text('\n'.join(lines) + '\n', encoding='utf-8')
-        else:
-            with open(env_path, 'a', encoding='utf-8') as f:
-                f.write(f'\nCOOKIE_ENCRYPTION_KEY={new_key.decode()}\n')
-        os.environ['COOKIE_ENCRYPTION_KEY'] = new_key.decode()
-        logger.info('Generated and saved new COOKIE_ENCRYPTION_KEY to .env')
-    except Exception as e:
-        logger.warning(f'Could not persist COOKIE_ENCRYPTION_KEY to .env: {e}')
-    return new_key
-
-
-# Helper to save cookies between sessions
-async def save_cookies(page, platform):
-    """Save cookies with proper directory permissions"""
-    try:
-        cookies = await page.context.cookies()
-        
-        # Validate cookies
-        if not cookies or not isinstance(cookies, list):
-            raise ValueError("Invalid cookie format")
-            
-        # Add timestamp for expiration check
-        cookie_data = {
-            "timestamp": int(time.time()),
-            "cookies": cookies
-        }
-        
-        # Ensure sessions directory exists with proper permissions
-        if not setup_sessions_directory():
-            raise Exception("Failed to set up sessions directory")
-        
-        # Encrypt cookies before saving
-        key = get_or_create_encryption_key()
-        f = Fernet(key)
-        encrypted_data = f.encrypt(json.dumps(cookie_data).encode())
-        
-        cookie_file = Path(__file__).parent / 'sessions' / f'{platform}_cookies.json'
-        with open(cookie_file, 'wb') as f:
-            f.write(encrypted_data)
-        # Set file permissions to 666 (rw-rw-rw-)
-        os.chmod(cookie_file, 0o666)
-            
-    except Exception as e:
-        raise Exception(f"Failed to save cookies: {str(e)}")
-
-# Helper to load cookies
-async def load_cookies(context, platform):
-    try:
-        with open(f'sessions/{platform}_cookies.json', 'rb') as f:
-            encrypted_data = f.read()
-            
-        # Decrypt cookies
-        key = get_or_create_encryption_key()
-        if not key:
-            return False
-            
-        f = Fernet(key)
-        cookie_data = json.loads(f.decrypt(encrypted_data))
-        
-        # Check cookie expiration (24 hours)
-        if int(time.time()) - cookie_data["timestamp"] > 86400:
-            os.remove(f'sessions/{platform}_cookies.json')
-            return False
-            
-        await context.add_cookies(cookie_data["cookies"])
-        return True
-        
-    except FileNotFoundError:
-        return False
-    except Exception as e:
-        # If there's any error loading cookies, delete the file and start fresh
+async def wait_for_selector_fallback(page, name: str, timeout: int = 10000):
+    """Wait for the first matching selector in the configured fallback order."""
+    last_error = None
+    for fallback in selector_fallbacks(name):
         try:
-            os.remove(f'sessions/{platform}_cookies.json')
-        except:
-            pass
-        return False
-    
-class BrowserSession:
-    """Persistent browser session — one visible Chromium window shared across all tool calls.
+            return await page.wait_for_selector(fallback, timeout=timeout)
+        except Exception as exc:
+            last_error = exc
+    if last_error:
+        raise last_error
+    raise ValueError(f"No selector fallbacks configured for {name}")
 
-    Usage stays the same: ``async with BrowserSession() as session:``
-    First call launches Chromium (always visible). Subsequent calls reuse the
-    same browser, context and page. ``__aexit__`` is a no-op so the browser
-    stays open between tool calls. Call the ``close_browser`` MCP tool to shut
-    it down when the workflow is done.
-    """
 
-    _playwright = None
-    _browser = None
-    _context = None
-    _page = None
+async def query_selector_fallback(page, name: str):
+    """Query for the first matching selector in the configured fallback order."""
+    for fallback in selector_fallbacks(name):
+        handle = await page.query_selector(fallback)
+        if handle:
+            return handle
+    return None
 
-    def __init__(self, platform='linkedin', headless=False, **_kwargs):
-        self.platform = platform
-        self.headless = headless
 
-    # -- context-manager interface (keeps existing tool code unchanged) -------
+async def click_selector_fallback(page, name: str, timeout: int = 10000):
+    """Click the first matching selector in the configured fallback order."""
+    handle = await wait_for_selector_fallback(page, name, timeout=timeout)
+    await handle.click()
+    return handle
 
-    async def __aenter__(self):
-        if (
-            BrowserSession._browser is None
-            or not BrowserSession._browser.is_connected()
-        ):
-            await self._launch()
-        return self
 
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
-        # Intentionally empty — browser stays open for the next tool call.
-        pass
-
-    # -- public helpers used by tools ----------------------------------------
-
-    async def new_page(self, url=None):
-        """Return the shared page, optionally navigating to *url*."""
-        if BrowserSession._page is None or BrowserSession._page.is_closed():
-            BrowserSession._page = await BrowserSession._context.new_page()
-        if url:
-            await BrowserSession._page.goto(
-                url, wait_until='domcontentloaded', timeout=30000,
-            )
-        return BrowserSession._page
-
-    async def save_session(self, page):
-        """Persist cookies to disk."""
-        try:
-            await save_cookies(page, self.platform)
-        except Exception as e:
-            logger.error(f"Error saving session: {e}")
-
-    # -- internals -----------------------------------------------------------
-
-    async def _launch(self):
-        if not setup_sessions_directory():
-            raise Exception("Failed to set up sessions directory")
-
-        logger.info("Launching persistent Chromium (visible)")
-        BrowserSession._playwright = await asyncio.wait_for(
-            async_playwright().start(), timeout=30,
-        )
-        BrowserSession._browser = await BrowserSession._playwright.chromium.launch(
-            headless=self.headless,
-            timeout=30000,
-            args=[
-                '--disable-dev-shm-usage',
-                '--no-sandbox',
-                '--disable-blink-features=AutomationControlled',
-                '--start-maximized',
-            ],
-        )
-        BrowserSession._context = await BrowserSession._browser.new_context(
-            viewport={'width': 1280, 'height': 800},
-            user_agent=(
-                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
-                'AppleWebKit/537.36 (KHTML, like Gecko) '
-                'Chrome/96.0.4664.110 Safari/537.36'
-            ),
-        )
-        # Load saved cookies
-        try:
-            loaded = await load_cookies(BrowserSession._context, self.platform)
-            logger.info("Session cookies loaded" if loaded else "No saved session")
-        except Exception as e:
-            logger.warning(f"Cookie load error: {e}")
-
-        BrowserSession._page = await BrowserSession._context.new_page()
-
-    @classmethod
-    async def shutdown(cls):
-        """Close the browser and release all resources."""
-        if cls._browser:
-            try:
-                await cls._browser.close()
-            except Exception:
-                pass
-        if cls._playwright:
-            try:
-                await cls._playwright.stop()
-            except Exception:
-                pass
-        cls._browser = None
-        cls._playwright = None
-        cls._context = None
-        cls._page = None
-        logger.info("Browser session closed")
+async def fill_selector_fallback(page, name: str, value: str, timeout: int = 10000):
+    """Fill the first matching selector in the configured fallback order."""
+    handle = await wait_for_selector_fallback(page, name, timeout=timeout)
+    await handle.fill(value)
+    return handle
 
 
 @mcp.tool()
@@ -298,7 +122,7 @@ async def login_linkedin(username: str | None = None, password: str | None = Non
             await page.set_viewport_size({'width': 1280, 'height': 800})
             
             # Navigate to LinkedIn login
-            await page.goto('https://www.linkedin.com/login', wait_until='domcontentloaded')
+            await page.goto('https://www.linkedin.com/login', wait_until='networkidle')
             
             # Check if already logged in
             if 'feed' in page.url:
@@ -313,9 +137,9 @@ async def login_linkedin(username: str | None = None, password: str | None = Non
             # Pre-fill credentials if provided
             try:
                 if username:
-                    await page.fill('#username', username)
+                    await fill_selector_fallback(page, 'login_username', username)
                 if password:
-                    await page.fill('#password', password)
+                    await fill_selector_fallback(page, 'login_password', password)
             except Exception as e:
                 logger.warning(f"Failed to pre-fill credentials: {str(e)}")
                 # Continue anyway - user can enter manually
@@ -388,18 +212,21 @@ async def get_linkedin_profile(username: str, ctx: Context) -> dict:
             ctx.info(f"Loading profile for {username}...")
             
             # Wait for profile to load
-            await page.wait_for_selector('.pv-top-card', timeout=10000)
+            await wait_for_selector_fallback(page, 'profile_top_card', timeout=10000)
             
             # Extract profile information
-            profile_data = await page.evaluate('''() => {
-                const getData = (selector) => {
-                    const el = document.querySelector(selector);
-                    return el ? el.innerText.trim() : null;
+            profile_data = await page.evaluate('''(selectors) => {
+                const getData = (selectorList) => {
+                    for (const selector of selectorList) {
+                        const el = document.querySelector(selector);
+                        if (el && el.innerText.trim()) return el.innerText.trim();
+                    }
+                    return null;
                 };
                 
                 // Try to get follower count from multiple possible locations
                 let followerCount = null;
-                const followerElements = document.querySelectorAll('.pv-top-card--list-bullet .t-bold, .pvs-header__optional-link span.t-bold');
+                const followerElements = document.querySelectorAll(selectors.profile_follower_items.join(', '));
                 for (const el of followerElements) {
                     const text = el.innerText.trim().toLowerCase();
                     if (text.includes('follower')) {
@@ -409,7 +236,7 @@ async def get_linkedin_profile(username: str, ctx: Context) -> dict:
                 }
                 // Also check the connections/followers section
                 if (!followerCount) {
-                    const allSpans = document.querySelectorAll('span');
+                    const allSpans = document.querySelectorAll(selectors.profile_text_spans.join(', '));
                     for (const span of allSpans) {
                         const text = span.innerText.trim().toLowerCase();
                         if (text.includes('follower')) {
@@ -421,23 +248,31 @@ async def get_linkedin_profile(username: str, ctx: Context) -> dict:
                 }
                 
                 return {
-                    name: getData('.pv-top-card--list .text-heading-xlarge') || getData('h1'),
-                    headline: getData('.pv-top-card--list .text-body-medium'),
-                    location: getData('.pv-top-card--list .text-body-small:not(.inline)'),
+                    name: getData(selectors.profile_name),
+                    headline: getData(selectors.profile_headline),
+                    location: getData(selectors.profile_location),
                     follower_count: followerCount,
                     connection_count: (() => {
-                        const el = document.querySelector('.pv-top-card--list-bullet .t-bold');
-                        if (el) {
+                        const elements = document.querySelectorAll(selectors.profile_connection_count.join(', '));
+                        for (const el of elements) {
                             const text = el.innerText.trim();
                             const match = text.match(/([0-9,]+)/);
                             if (match && !text.toLowerCase().includes('follower')) return parseInt(match[1].replace(/,/g, ''));
                         }
                         return null;
                     })(),
-                    about: getData('.pv-shared-text-with-see-more .inline-show-more-text'),
+                    about: getData(selectors.profile_about),
                     profile_url: window.location.href
                 };
-            }''')
+            }''', selector_payload(
+                'profile_about',
+                'profile_connection_count',
+                'profile_follower_items',
+                'profile_headline',
+                'profile_location',
+                'profile_name',
+                'profile_text_spans',
+            ))
             
             await session.save_session(page)
             
@@ -487,13 +322,7 @@ async def browse_linkedin_feed(ctx: Context, count: int = 5) -> dict:
                 try:
                     # Try multiple selectors — LinkedIn updates class names frequently
                     post_selector = None
-                    for selector in [
-                        '[data-urn*="urn:li:activity"]',
-                        '[data-id*="urn:li:activity"]',
-                        '.feed-shared-update-v2',
-                        '.occludable-update',
-                        'div[data-urn]',
-                    ]:
+                    for selector in selector_fallbacks('feed_post_container'):
                         try:
                             await page.wait_for_selector(selector, timeout=4000)
                             post_selector = selector
@@ -508,17 +337,9 @@ async def browse_linkedin_feed(ctx: Context, count: int = 5) -> dict:
                         continue
                     
                     # Extract visible posts
-                    new_posts = await page.evaluate('''() => {
-                        // Try multiple selectors in order
-                        const selectors = [
-                            '[data-urn*="urn:li:activity"]',
-                            '[data-id*="urn:li:activity"]',
-                            ".feed-shared-update-v2",
-                            ".occludable-update",
-                            "div[data-urn]"
-                        ];
+                    new_posts = await page.evaluate('''(selectors) => {
                         let postElements = [];
-                        for (const sel of selectors) {
+                        for (const sel of selectors.feed_post_container) {
                             const els = document.querySelectorAll(sel);
                             if (els.length > 0) { postElements = Array.from(els); break; }
                         }
@@ -541,28 +362,24 @@ async def browse_linkedin_feed(ctx: Context, count: int = 5) -> dict:
                                     postUrl = 'https://www.linkedin.com/feed/update/urn:li:activity:' + activityId;
                                 }
                                 if (!postUrl) {
-                                    const shareLink = post.querySelector('a[href*="/feed/update/"]');
+                                    const shareLink = post.querySelector(selectors.feed_post_share_link.join(', '));
                                     if (shareLink) postUrl = shareLink.href.split('?')[0];
                                 }
 
                                 // Author profile URL
                                 const authorLink = post.querySelector(
-                                    '.update-components-actor__container-link, .feed-shared-actor__container-link, a[href*="/in/"]'
+                                    selectors.feed_post_author_link.join(', ')
                                 );
                                 const authorProfileUrl = authorLink ? authorLink.href.split('?')[0] : null;
 
                                 // Likes
-                                const likesText = getText(post,
-                                    '.social-details-social-counts__reactions-count',
-                                    'button[aria-label*="reaction"] span',
-                                    '[aria-label*="like"] span'
-                                );
+                                const likesText = getText(post, ...selectors.feed_post_likes);
                                 const likesCount = parseInt((likesText || '0').replace(/[^0-9]/g, '')) || 0;
 
                                 // Comments
                                 let commentsCount = 0;
                                 for (const btn of post.querySelectorAll(
-                                    '.social-details-social-counts__comments, button[aria-label*="comment"]'
+                                    selectors.feed_post_comments.join(', ')
                                 )) {
                                     const t = btn.innerText?.trim() || btn.getAttribute('aria-label') || '';
                                     const m = t.match(/([0-9]+)/);
@@ -570,28 +387,11 @@ async def browse_linkedin_feed(ctx: Context, count: int = 5) -> dict:
                                 }
 
                                 return {
-                                    author: getText(post,
-                                        '.update-components-actor__name span[aria-hidden="true"]',
-                                        '.update-components-actor__name',
-                                        '.feed-shared-actor__name'
-                                    ) || 'Unknown',
-                                    author_headline: getText(post,
-                                        '.update-components-actor__description span[aria-hidden="true"]',
-                                        '.update-components-actor__description',
-                                        '.feed-shared-actor__description'
-                                    ),
+                                    author: getText(post, ...selectors.feed_post_author_name) || 'Unknown',
+                                    author_headline: getText(post, ...selectors.feed_post_author_headline),
                                     author_profile_url: authorProfileUrl,
-                                    content: getText(post,
-                                        '.update-components-text span[dir]',
-                                        '.update-components-text',
-                                        '.feed-shared-text__text-view span[dir]',
-                                        '.feed-shared-text'
-                                    ),
-                                    timestamp: getText(post,
-                                        '.update-components-actor__sub-description span[aria-hidden="true"]',
-                                        '.update-components-actor__sub-description',
-                                        '.feed-shared-actor__sub-description'
-                                    ),
+                                    content: getText(post, ...selectors.feed_post_content),
+                                    timestamp: getText(post, ...selectors.feed_post_timestamp),
                                     post_url: postUrl,
                                     likes_count: likesCount,
                                     comments_count: commentsCount
@@ -600,7 +400,17 @@ async def browse_linkedin_feed(ctx: Context, count: int = 5) -> dict:
                                 return null;
                             }
                         }).filter(p => p !== null && (p.content || p.author !== 'Unknown'));
-                    }''')
+                    }''', selector_payload(
+                        'feed_post_author_headline',
+                        'feed_post_author_link',
+                        'feed_post_author_name',
+                        'feed_post_comments',
+                        'feed_post_container',
+                        'feed_post_content',
+                        'feed_post_likes',
+                        'feed_post_share_link',
+                        'feed_post_timestamp',
+                    ))
                     
                     # Add new posts to our collection, avoiding duplicates
                     for post in new_posts:
@@ -656,25 +466,25 @@ async def search_linkedin_profiles(query: str, ctx: Context, count: int = 5) -> 
             report_progress(ctx, 20, 100, "Loading search results...")
             
             # Wait for search results
-            await page.wait_for_selector('.reusable-search__result-container', timeout=10000)
+            await wait_for_selector_fallback(page, 'search_result_container', timeout=10000)
             ctx.info("Search results loaded")
             report_progress(ctx, 50, 100, "Extracting profile data...")
             
             # Extract profile data
-            profiles = await page.evaluate('''(count) => {
+            profiles = await page.evaluate('''({ count, selectors }) => {
                 const results = [];
-                const profileCards = document.querySelectorAll('.reusable-search__result-container');
+                const profileCards = document.querySelectorAll(selectors.search_result_container.join(', '));
                 
                 for (let i = 0; i < Math.min(profileCards.length, count); i++) {
                     const card = profileCards[i];
                     try {
                         const profile = {
-                            name: card.querySelector('.entity-result__title-text a')?.innerText?.trim() || 'Unknown',
-                            headline: card.querySelector('.entity-result__primary-subtitle')?.innerText?.trim() || '',
-                            location: card.querySelector('.entity-result__secondary-subtitle')?.innerText?.trim() || '',
-                            profileUrl: card.querySelector('.app-aware-link')?.href || '',
-                            connectionDegree: card.querySelector('.dist-value')?.innerText?.trim() || '',
-                            snippet: card.querySelector('.entity-result__summary')?.innerText?.trim() || ''
+                            name: card.querySelector(selectors.search_result_title_link.join(', '))?.innerText?.trim() || 'Unknown',
+                            headline: card.querySelector(selectors.search_result_headline.join(', '))?.innerText?.trim() || '',
+                            location: card.querySelector(selectors.search_result_location.join(', '))?.innerText?.trim() || '',
+                            profileUrl: card.querySelector(selectors.search_result_profile_link.join(', '))?.href || '',
+                            connectionDegree: card.querySelector(selectors.search_result_distance.join(', '))?.innerText?.trim() || '',
+                            snippet: card.querySelector(selectors.search_result_snippet.join(', '))?.innerText?.trim() || ''
                         };
                         results.push(profile);
                     } catch (e) {
@@ -682,7 +492,18 @@ async def search_linkedin_profiles(query: str, ctx: Context, count: int = 5) -> 
                     }
                 }
                 return results;
-            }''', count)
+            }''', {
+                "count": count,
+                "selectors": selector_payload(
+                    'search_result_container',
+                    'search_result_distance',
+                    'search_result_headline',
+                    'search_result_location',
+                    'search_result_profile_link',
+                    'search_result_snippet',
+                    'search_result_title_link',
+                ),
+            })
             
             report_progress(ctx, 90, 100, "Saving session...")
             await session.save_session(page)
@@ -725,37 +546,55 @@ async def view_linkedin_profile(profile_url: str, ctx: Context) -> dict:
             ctx.info(f"Viewing profile: {profile_url}")
             
             # Wait for profile to load
-            await page.wait_for_selector('.pv-top-card', timeout=10000)
+            await wait_for_selector_fallback(page, 'profile_top_card', timeout=10000)
             report_progress(ctx, 50, 100, "Extracting profile data...")
             
             # Extract profile information
-            profile_data = await page.evaluate('''() => {
-                const getData = (selector, property = 'innerText') => {
-                    const element = document.querySelector(selector);
-                    return element ? element[property].trim() : null;
+            profile_data = await page.evaluate('''(selectors) => {
+                const getData = (selectorList, scope = document, property = 'innerText') => {
+                    for (const selector of selectorList) {
+                        const element = scope.querySelector(selector);
+                        if (element && element[property]?.trim()) return element[property].trim();
+                    }
+                    return null;
                 };
                 
                 return {
-                    name: getData('.pv-top-card--list .text-heading-xlarge'),
-                    headline: getData('.pv-top-card--list .text-body-medium'),
-                    location: getData('.pv-top-card--list .text-body-small:not(.inline)'),
-                    connectionDegree: getData('.pv-top-card__connections-count .t-black--light'),
-                    about: getData('.pv-shared-text-with-see-more .inline-show-more-text'),
-                    experience: Array.from(document.querySelectorAll('#experience-section .pv-entity__summary-info'))
+                    name: getData(selectors.profile_name),
+                    headline: getData(selectors.profile_headline),
+                    location: getData(selectors.profile_location),
+                    connectionDegree: getData(selectors.profile_connection_count),
+                    about: getData(selectors.profile_about),
+                    experience: Array.from(document.querySelectorAll(selectors.profile_experience_item.join(', ')))
                         .map(exp => ({
-                            title: exp.querySelector('h3')?.innerText?.trim() || '',
-                            company: exp.querySelector('.pv-entity__secondary-title')?.innerText?.trim() || '',
-                            duration: exp.querySelector('.pv-entity__date-range span:not(.visually-hidden)')?.innerText?.trim() || ''
+                            title: getData(selectors.profile_experience_title, exp) || '',
+                            company: getData(selectors.profile_experience_company, exp) || '',
+                            duration: getData(selectors.profile_experience_duration, exp) || ''
                         })),
-                    education: Array.from(document.querySelectorAll('#education-section .pv-education-entity'))
+                    education: Array.from(document.querySelectorAll(selectors.profile_education_item.join(', ')))
                         .map(edu => ({
-                            school: edu.querySelector('.pv-entity__school-name')?.innerText?.trim() || '',
-                            degree: edu.querySelector('.pv-entity__degree-name .pv-entity__comma-item')?.innerText?.trim() || '',
-                            field: edu.querySelector('.pv-entity__fos .pv-entity__comma-item')?.innerText?.trim() || '',
-                            dates: edu.querySelector('.pv-entity__dates span:not(.visually-hidden)')?.innerText?.trim() || ''
+                            school: getData(selectors.profile_education_school, edu) || '',
+                            degree: getData(selectors.profile_education_degree, edu) || '',
+                            field: getData(selectors.profile_education_field, edu) || '',
+                            dates: getData(selectors.profile_education_dates, edu) || ''
                         }))
                 };
-            }''')
+            }''', selector_payload(
+                'profile_about',
+                'profile_connection_count',
+                'profile_education_dates',
+                'profile_education_degree',
+                'profile_education_field',
+                'profile_education_item',
+                'profile_education_school',
+                'profile_experience_company',
+                'profile_experience_duration',
+                'profile_experience_item',
+                'profile_experience_title',
+                'profile_headline',
+                'profile_location',
+                'profile_name',
+            ))
             
             report_progress(ctx, 100, 100, "Profile extraction complete")
             await session.save_session(page)
@@ -802,31 +641,37 @@ async def interact_with_linkedin_post(post_url: str, ctx: Context, action: str =
                 }
                 
             # Wait for post to load
-            await page.wait_for_selector('.feed-shared-update-v2', timeout=10000)
+            await wait_for_selector_fallback(page, 'post_detail_container', timeout=10000)
             ctx.info(f"Post loaded, performing action: {action}")
             
             # Read post content
-            post_content = await page.evaluate('''() => {
-                const post = document.querySelector('.feed-shared-update-v2');
+            post_content = await page.evaluate('''(selectors) => {
+                const post = document.querySelector(selectors.post_detail_container.join(', '));
                 return {
-                    author: post.querySelector('.feed-shared-actor__name')?.innerText?.trim() || 'Unknown',
-                    content: post.querySelector('.feed-shared-text')?.innerText?.trim() || '',
-                    engagementCount: post.querySelector('.social-details-social-counts__reactions-count')?.innerText?.trim() || '0'
+                    author: post?.querySelector(selectors.post_detail_author.join(', '))?.innerText?.trim() || 'Unknown',
+                    content: post?.querySelector(selectors.post_detail_content.join(', '))?.innerText?.trim() || '',
+                    engagementCount: post?.querySelector(selectors.post_detail_engagement.join(', '))?.innerText?.trim() || '0'
                 };
-            }''')
+            }''', selector_payload(
+                'post_detail_author',
+                'post_detail_container',
+                'post_detail_content',
+                'post_detail_engagement',
+            ))
             
             # Perform the requested action
             if action == "like":
                 # Find and click like button if not already liked
-                liked = await page.evaluate('''() => {
-                    const likeButton = document.querySelector('button.react-button__trigger');
+                liked = await page.evaluate('''(selectors) => {
+                    const likeButton = document.querySelector(selectors.post_like_button.join(', '));
+                    if (!likeButton) return false;
                     const isLiked = likeButton.getAttribute('aria-pressed') === 'true';
                     if (!isLiked) {
                         likeButton.click();
                         return true;
                     }
                     return false;
-                }''')
+                }''', selector_payload('post_like_button'))
                 
                 result = {
                     "status": "success",
@@ -837,9 +682,9 @@ async def interact_with_linkedin_post(post_url: str, ctx: Context, action: str =
                 
             elif action == "comment" and comment:
                 # Add comment to the post
-                await page.click('button.comments-comment-box__trigger')  # Open comment box
-                await page.fill('.ql-editor', comment)
-                await page.click('button.comments-comment-box__submit-button')  # Submit comment
+                await click_selector_fallback(page, 'post_comment_trigger')
+                await fill_selector_fallback(page, 'post_comment_editor', comment)
+                await click_selector_fallback(page, 'post_comment_submit')
                 
                 # Wait for comment to appear
                 await page.wait_for_timeout(2000)
@@ -854,19 +699,11 @@ async def interact_with_linkedin_post(post_url: str, ctx: Context, action: str =
                 # Repost/share the post
                 try:
                     # Click the repost button
-                    repost_button = await page.wait_for_selector(
-                        'button[aria-label*="Repost"], button[aria-label*="repost"]',
-                        timeout=5000
-                    )
-                    await repost_button.click()
+                    await click_selector_fallback(page, 'post_repost_button', timeout=5000)
                     await page.wait_for_timeout(1000)
                     
                     # Click "Repost" option (instant repost without comment)
-                    repost_option = await page.wait_for_selector(
-                        'button:has-text("Repost"), div[data-artdeco-is-focused] button',
-                        timeout=5000
-                    )
-                    await repost_option.click()
+                    await click_selector_fallback(page, 'post_repost_option', timeout=5000)
                     await page.wait_for_timeout(2000)
                     
                     result = {
@@ -938,28 +775,19 @@ async def send_connection_request(profile_url: str, ctx: Context, note: str | No
             ctx.info(f"Sending connection request to {profile_url}")
             
             # Wait for profile to load
-            await page.wait_for_selector('.pv-top-card', timeout=10000)
+            await wait_for_selector_fallback(page, 'profile_top_card', timeout=10000)
             
             # Look for the Connect button — it may be in the main actions or the More dropdown
             connect_button = None
             try:
-                connect_button = await page.wait_for_selector(
-                    'button[aria-label*="Invite"][aria-label*="connect"], button:has-text("Connect")',
-                    timeout=5000
-                )
+                connect_button = await wait_for_selector_fallback(page, 'connect_button', timeout=5000)
             except Exception:
                 # Connect might be hidden under "More" dropdown
                 try:
-                    more_button = await page.wait_for_selector(
-                        'button[aria-label="More actions"], button:has-text("More")',
-                        timeout=3000
-                    )
+                    more_button = await wait_for_selector_fallback(page, 'more_actions_button', timeout=3000)
                     await more_button.click()
                     await page.wait_for_timeout(1000)
-                    connect_button = await page.wait_for_selector(
-                        'div[role="listbox"] button:has-text("Connect"), li button:has-text("Connect")',
-                        timeout=3000
-                    )
+                    connect_button = await wait_for_selector_fallback(page, 'connect_button_more_menu', timeout=3000)
                 except Exception:
                     pass
             
@@ -975,18 +803,12 @@ async def send_connection_request(profile_url: str, ctx: Context, note: str | No
             if note:
                 # Click "Add a note" button in the connection dialog
                 try:
-                    add_note_button = await page.wait_for_selector(
-                        'button[aria-label="Add a note"], button:has-text("Add a note")',
-                        timeout=3000
-                    )
+                    add_note_button = await wait_for_selector_fallback(page, 'connect_add_note_button', timeout=3000)
                     await add_note_button.click()
                     await page.wait_for_timeout(500)
                     
                     # Fill in the note
-                    note_field = await page.wait_for_selector(
-                        'textarea[name="message"], textarea#custom-message',
-                        timeout=3000
-                    )
+                    note_field = await wait_for_selector_fallback(page, 'connect_note_field', timeout=3000)
                     await note_field.fill(note)
                     await page.wait_for_timeout(500)
                 except Exception as note_error:
@@ -994,10 +816,7 @@ async def send_connection_request(profile_url: str, ctx: Context, note: str | No
             
             # Click Send
             try:
-                send_button = await page.wait_for_selector(
-                    'button[aria-label="Send invitation"], button[aria-label="Send now"], button:has-text("Send")',
-                    timeout=5000
-                )
+                send_button = await wait_for_selector_fallback(page, 'connect_send_button', timeout=5000)
                 await send_button.click()
                 await page.wait_for_timeout(2000)
             except Exception as send_error:
@@ -1007,10 +826,10 @@ async def send_connection_request(profile_url: str, ctx: Context, note: str | No
                 }
             
             # Extract the profile name for logging
-            profile_name = await page.evaluate('''() => {
-                const el = document.querySelector('.pv-top-card--list .text-heading-xlarge, h1');
+            profile_name = await page.evaluate('''(selectors) => {
+                const el = document.querySelector(selectors.profile_name.join(', '));
                 return el ? el.innerText.trim() : 'Unknown';
-            }''')
+            }''', selector_payload('profile_name'))
             
             await session.save_session(page)
             
@@ -1070,11 +889,11 @@ async def search_linkedin_posts(query: str, ctx: Context, count: int = 10, sort_
             scroll_attempts = 0
             max_scrolls = 10
 
-            EXTRACT_JS = """(alreadySeen) => {
+            EXTRACT_JS = """({ alreadySeen, selectors }) => {
                 const results = [];
                 const seenKeys = new Set(alreadySeen);
 
-                const authorLinks = Array.from(document.querySelectorAll('a[href*="linkedin.com/in/"]'));
+                const authorLinks = Array.from(document.querySelectorAll(selectors.search_posts_author_links.join(', ')));
 
                 for (const aLink of authorLinks) {
                     let container = aLink.parentElement;
@@ -1095,9 +914,9 @@ async def search_linkedin_posts(query: str, ctx: Context, count: int = 10, sort_
                     seenKeys.add(dedupeKey);
 
                     let author = '';
-                    const inLinks = Array.from(container.querySelectorAll('a[href*="linkedin.com/in/"]'));
+                    const inLinks = Array.from(container.querySelectorAll(selectors.search_posts_author_links.join(', ')));
                     for (const il of inLinks) {
-                        const hiddenSpan = il.querySelector('span[aria-hidden="true"]');
+                        const hiddenSpan = il.querySelector(selectors.search_posts_author_name_hidden.join(', '));
                         let raw = hiddenSpan ? hiddenSpan.textContent.trim() : (il.textContent || '').trim().replace(/\\s+/g, ' ');
                         let candidate = raw.split('•')[0].trim().split('\\n')[0].trim();
                         if (candidate.length >= 2 && candidate.length <= 60) {
@@ -1116,14 +935,15 @@ async def search_linkedin_posts(query: str, ctx: Context, count: int = 10, sort_
 
                     let postUrl = '';
                     // 1. Direct feed/update link
-                    const feedLink = container.querySelector('a[href*="feed/update/urn:li:"]');
+                    const feedLink = container.querySelector(selectors.search_posts_feed_link.join(', '));
                     if (feedLink) {
                         postUrl = feedLink.href.split('?')[0];
                     }
                     // 2. data-urn on the container or a parent/child
                     if (!postUrl) {
-                        let urnEl = container.closest('[data-urn*="urn:li:activity"]')
-                                 || container.querySelector('[data-urn*="urn:li:activity"]');
+                        const urnSelector = selectors.search_posts_urn_container.join(', ');
+                        let urnEl = container.closest(urnSelector)
+                                 || container.querySelector(urnSelector);
                         if (!urnEl) {
                             // walk up a few levels
                             let p = container;
@@ -1140,7 +960,7 @@ async def search_linkedin_posts(query: str, ctx: Context, count: int = 10, sort_
                     }
                     // 3. /posts/ style permalink
                     if (!postUrl) {
-                        const postsLink = container.querySelector('a[href*="/posts/"]');
+                        const postsLink = container.querySelector(selectors.search_posts_permalink.join(', '));
                         if (postsLink) postUrl = postsLink.href.split('?')[0];
                     }
                     // 4. Embedded activity URN anywhere in container HTML
@@ -1173,7 +993,7 @@ async def search_linkedin_posts(query: str, ctx: Context, count: int = 10, sort_
                     let comments = '';
 
                     // Strategy 1: aria-label scan (handles "23 reactions" AND "View 23 reactions")
-                    const ariaEls = Array.from(container.querySelectorAll('[aria-label]'));
+                    const ariaEls = Array.from(container.querySelectorAll(selectors.search_posts_aria_elements.join(', ')));
                     for (const el of ariaEls) {
                         const label = el.getAttribute('aria-label') || '';
                         const lower = label.toLowerCase();
@@ -1189,14 +1009,14 @@ async def search_linkedin_posts(query: str, ctx: Context, count: int = 10, sort_
 
                     // Strategy 2: known LinkedIn social-count CSS classes
                     if (!likes) {
-                        const rxEl = container.querySelector('.social-details-social-counts__reactions-count, [class*="reactions-count"], [class*="social-counts"] span');
+                        const rxEl = container.querySelector(selectors.search_posts_reactions_count.join(', '));
                         if (rxEl) {
                             const txt = (rxEl.innerText || '').trim();
                             if (/^[\\d,]+$/.test(txt)) likes = txt.replace(/,/g, '') + ' reactions';
                         }
                     }
                     if (!comments) {
-                        const cmEl = container.querySelector('[class*="comments-count"], [class*="comment-count"]');
+                        const cmEl = container.querySelector(selectors.search_posts_comments_count.join(', '));
                         if (cmEl) {
                             const txt = (cmEl.innerText || '').trim();
                             if (/^[\\d,]+$/.test(txt)) comments = txt.replace(/,/g, '') + ' comments';
@@ -1223,7 +1043,18 @@ async def search_linkedin_posts(query: str, ctx: Context, count: int = 10, sort_
             seen_keys = []
 
             while len(collected) < count and scroll_attempts < max_scrolls:
-                new_posts = await page.evaluate(EXTRACT_JS, seen_keys)
+                new_posts = await page.evaluate(EXTRACT_JS, {
+                    "alreadySeen": seen_keys,
+                    "selectors": selector_payload(
+                        'search_posts_aria_elements',
+                        'search_posts_author_links',
+                        'search_posts_comments_count',
+                        'search_posts_feed_link',
+                        'search_posts_permalink',
+                        'search_posts_reactions_count',
+                        'search_posts_urn_container',
+                    ),
+                })
 
                 for post in new_posts:
                     key = post['dedupeKey']
@@ -1234,14 +1065,14 @@ async def search_linkedin_posts(query: str, ctx: Context, count: int = 10, sort_
                 if len(collected) >= count:
                     break
 
-                await page.evaluate("""() => {
-                    const main = document.querySelector('main#workspace') || document.querySelector('main');
+                await page.evaluate("""(selectors) => {
+                    const main = document.querySelector(selectors.search_posts_scroll_main.join(', '));
                     if (main) {
                         main.scrollTop = main.scrollHeight;
                     } else {
                         window.scrollTo(0, document.body.scrollHeight);
                     }
-                }""")
+                }""", selector_payload('search_posts_scroll_main'))
                 await page.wait_for_timeout(3000)
                 scroll_attempts += 1
                 report_progress(ctx, 30 + scroll_attempts * 5, 100, f"Found {len(collected)} posts so far...")
@@ -1327,68 +1158,48 @@ async def comment_on_approved_posts(approved_posts: list, ctx: Context) -> dict:
                     if is_profile_fallback:
                         nav_url = post_url.rstrip('/') + '/recent-activity/all/'
 
-                    await page.goto(nav_url, wait_until='domcontentloaded', timeout=60000)
+                    await page.goto(nav_url, wait_until='networkidle', timeout=60000)
 
                     if 'login' in page.url or 'authwall' in page.url:
                         results.append({"post_url": post_url, "status": "error", "message": "Session expired"})
                         continue
 
-                    await page.wait_for_selector(
-                        '.feed-shared-update-v2, .update-components-update-v2, '
-                        '.occludable-update, [data-urn]',
-                        timeout=20000
-                    )
+                    await wait_for_selector_fallback(page, 'post_detail_container', timeout=20000)
                     await page.wait_for_timeout(1500)
 
-                    comment_trigger = await page.query_selector(
-                        'button.comment-button, '
-                        'button[aria-label*="omment"], '
-                        'button[aria-label*="Comment"], '
-                        '.comments-comment-box__trigger, '
-                        'button.comments-comment-box__trigger'
-                    )
+                    comment_trigger = await query_selector_fallback(page, 'post_comment_trigger')
                     if comment_trigger:
                         try:
                             await comment_trigger.click()
                         except Exception:
                             pass
                     else:
-                        await page.evaluate('''() => {
-                            const btn = Array.from(document.querySelectorAll('button'))
+                        await page.evaluate('''(selectors) => {
+                            const btn = Array.from(document.querySelectorAll(selectors.generic_button.join(', ')))
                                 .find(b => (b.innerText || '').trim().toLowerCase() === 'comment');
                             if (btn) btn.click();
-                        }''')
+                        }''', selector_payload('generic_button'))
                     await page.wait_for_timeout(1200)
 
-                    editor = await page.wait_for_selector(
-                        '.ql-editor[contenteditable="true"], '
-                        '.comments-comment-box__text-editor [contenteditable="true"], '
-                        'div[contenteditable="true"][role="textbox"]',
-                        timeout=8000
-                    )
+                    editor = await wait_for_selector_fallback(page, 'post_comment_editor', timeout=8000)
                     await editor.click()
                     await editor.type(comment_text, delay=25)
                     await page.wait_for_timeout(600)
 
-                    submit_btn = await page.query_selector(
-                        'button.comments-comment-box__submit-button--cr, '
-                        'button.comments-comment-box__submit-button, '
-                        'button[type="submit"].comments-comment-box__submit-button--cr, '
-                        'button[type="submit"].comments-comment-box__submit-button'
-                    )
+                    submit_btn = await query_selector_fallback(page, 'post_comment_submit')
                     if not submit_btn:
-                        submitted = await page.evaluate('''() => {
-                            const editor = document.querySelector('.ql-editor[contenteditable="true"], div[contenteditable="true"][role="textbox"]');
+                        submitted = await page.evaluate('''(selectors) => {
+                            const editor = document.querySelector(selectors.post_comment_editor.join(', '));
                             if (!editor) return false;
                             let el = editor;
                             for (let i = 0; i < 8; i++) {
                                 el = el.parentElement;
                                 if (!el) break;
-                                const btn = el.querySelector('button[type="submit"], button.comments-comment-box__submit-button--cr, button.comments-comment-box__submit-button');
+                                const btn = el.querySelector(selectors.post_comment_submit.join(', '));
                                 if (btn) { btn.click(); return true; }
                             }
                             return false;
-                        }''')
+                        }''', selector_payload('post_comment_editor', 'post_comment_submit'))
                         if submitted:
                             await page.wait_for_timeout(2500)
                             results.append({"post_url": post_url, "status": "success", "message": "Comment posted successfully", "comment": comment_text})
