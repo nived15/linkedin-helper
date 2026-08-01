@@ -4,6 +4,7 @@ import inspect
 import re
 
 import linkedin_browser_mcp
+import linkedin_mcp.browser.session as browser_session_module
 from linkedin_browser_mcp import (
     BrowserSession,
     save_cookies,
@@ -147,24 +148,32 @@ def test_fingerprint_profile_is_stable_per_account():
     first = build_fingerprint_profile("linkedin", "seed@example.com")
     second = build_fingerprint_profile("linkedin", "seed@example.com")
     catalog_user_agents = {profile.user_agent for profile in FINGERPRINT_CATALOG}
+    major_versions = [
+        int(re.search(r"Chrome/(\d+)\.", user_agent).group(1))
+        for user_agent in catalog_user_agents
+    ]
 
     assert first == second
     assert "Chrome/96.0.4664.110" not in first.user_agent
     assert first.user_agent in catalog_user_agents
     assert re.search(r"Chrome/\d{3}\.\d+\.\d+\.\d+", first.user_agent)
+    assert int(re.search(r"Chrome/(\d+)\.", first.user_agent).group(1)) >= 120
     assert all(
         re.search(r"Chrome/\d{3}\.\d+\.\d+\.\d+", user_agent)
         for user_agent in catalog_user_agents
     )
+    assert all(version >= 120 for version in major_versions)
 
 
 def test_selectors_are_centralized_in_browser_module():
-    source = inspect.getsource(linkedin_browser_mcp)
+    main_source = inspect.getsource(linkedin_browser_mcp)
+    session_source = inspect.getsource(browser_session_module)
 
-    assert not re.search(r"Chrome/\d{2,3}\.\d+\.\d+\.\d+", source)
-    assert ".pv-top-card" not in source
-    assert ".feed-shared-update-v2" not in source
-    assert "selector_fallbacks" in source
+    assert not re.search(r"Chrome/\d{2,3}\.\d+\.\d+\.\d+", main_source)
+    assert ".pv-top-card" not in main_source
+    assert ".feed-shared-update-v2" not in main_source
+    assert "selector_fallbacks" in main_source
+    assert "FINGERPRINT_CATALOG" in session_source
     assert selector_fallbacks("feed_post_container")[0] == '[data-urn*="urn:li:activity"]'
 
 @pytest.mark.asyncio

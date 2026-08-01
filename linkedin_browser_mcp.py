@@ -122,7 +122,7 @@ async def login_linkedin(username: str | None = None, password: str | None = Non
             await page.set_viewport_size({'width': 1280, 'height': 800})
             
             # Navigate to LinkedIn login
-            await page.goto('https://www.linkedin.com/login', wait_until='networkidle')
+            await page.goto('https://www.linkedin.com/login', wait_until='domcontentloaded')
             
             # Check if already logged in
             if 'feed' in page.url:
@@ -1158,7 +1158,7 @@ async def comment_on_approved_posts(approved_posts: list, ctx: Context) -> dict:
                     if is_profile_fallback:
                         nav_url = post_url.rstrip('/') + '/recent-activity/all/'
 
-                    await page.goto(nav_url, wait_until='networkidle', timeout=60000)
+                    await page.goto(nav_url, wait_until='domcontentloaded', timeout=60000)
 
                     if 'login' in page.url or 'authwall' in page.url:
                         results.append({"post_url": post_url, "status": "error", "message": "Session expired"})

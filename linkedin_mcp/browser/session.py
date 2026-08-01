@@ -82,7 +82,7 @@ def setup_sessions_directory() -> bool:
         current_mode = SESSIONS_DIR.stat().st_mode & 0o777
         if current_mode != 0o700:
             os.chmod(SESSIONS_DIR, 0o700)
-        logger.debug("Sessions directory set up at %s with full permissions", SESSIONS_DIR)
+        logger.debug("Sessions directory set up at %s with owner-only permissions", SESSIONS_DIR)
         return True
     except Exception as exc:
         logger.error("Failed to set up sessions directory: %s", exc)
@@ -149,7 +149,26 @@ def build_stealth_script(profile: FingerprintProfile) -> str:
   define(navigator, 'language', {locale});
   define(navigator, 'languages', {languages});
   define(navigator, 'platform', {platform});
-  define(navigator, 'plugins', [1, 2, 3, 4, 5]);
+  const plugins = [
+    {{
+      name: 'Chrome PDF Viewer',
+      filename: 'internal-pdf-viewer',
+      description: 'Portable Document Format',
+    }},
+    {{
+      name: 'Chromium PDF Viewer',
+      filename: 'mhjfbmdgcfjbbpaeojofohoefgiehjai',
+      description: 'Portable Document Format',
+    }},
+    {{
+      name: 'Microsoft Edge PDF Viewer',
+      filename: 'internal-pdf-viewer',
+      description: 'Portable Document Format',
+    }},
+  ];
+  plugins.item = (index) => plugins[index] ?? null;
+  plugins.namedItem = (name) => plugins.find((plugin) => plugin.name === name) ?? null;
+  define(navigator, 'plugins', plugins);
 
   if (!window.chrome) {{
     Object.defineProperty(window, 'chrome', {{
