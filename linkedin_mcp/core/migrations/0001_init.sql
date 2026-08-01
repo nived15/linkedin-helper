@@ -30,7 +30,6 @@ CREATE TABLE IF NOT EXISTS working_hours (
     weekday INTEGER NOT NULL CHECK (weekday BETWEEN 0 AND 6),
     start_minute INTEGER NOT NULL CHECK (start_minute BETWEEN 0 AND 1439),
     end_minute INTEGER NOT NULL CHECK (end_minute BETWEEN 0 AND 1439),
-    CHECK (start_minute < end_minute),
     PRIMARY KEY (account_id, weekday),
     FOREIGN KEY (account_id) REFERENCES accounts (id) ON DELETE CASCADE
 );
@@ -49,7 +48,7 @@ CREATE TABLE IF NOT EXISTS leads (
     organization_name TEXT,
     organization_title TEXT,
     location_name TEXT,
-    member_distance TEXT,
+    member_distance TEXT, -- LinkedIn connection degree (1st, 2nd, 3rd, etc.)
     connection_count INTEGER,
     follower_count INTEGER,
     connected_at TEXT,
@@ -267,7 +266,7 @@ CREATE TABLE IF NOT EXISTS ai_drafts (
     kind TEXT NOT NULL CHECK (kind IN ('connection_note', 'message', 'comment', 'icp_evaluation')),
     context_json TEXT NOT NULL DEFAULT '{}',
     generated_text TEXT,
-    verdict_json TEXT,
+    verdict_json TEXT, -- Holds {match, score, reason} for ICP evaluation rows.
     status TEXT NOT NULL CHECK (status IN ('needs_generation', 'pending_approval', 'approved', 'rejected', 'sent')),
     model TEXT,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,

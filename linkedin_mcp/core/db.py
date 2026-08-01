@@ -45,17 +45,18 @@ def ensure_schema_migrations_table(conn: sqlite3.Connection) -> None:
 def split_sql_statements(sql: str) -> list[str]:
     """Split a migration script into complete SQL statements."""
     statements: list[str] = []
-    buffer = ""
+    buffer_lines: list[str] = []
 
     for line in sql.splitlines():
-        buffer = f"{buffer}\n{line}" if buffer else line
+        buffer_lines.append(line)
+        buffer = "\n".join(buffer_lines)
         if sqlite3.complete_statement(buffer):
             statement = buffer.strip()
             if statement:
                 statements.append(statement)
-            buffer = ""
+            buffer_lines = []
 
-    trailing = buffer.strip()
+    trailing = "\n".join(buffer_lines).strip()
     if trailing:
         if not sqlite3.complete_statement(trailing):
             raise ValueError("Migration contains an incomplete trailing SQL statement")
@@ -85,13 +86,19 @@ def migrate(
             continue
 
         migration_sql = migration_path.read_text(encoding="utf-8").strip()
-        with conn:
+        conn.execute("BEGIN")
+        try:
             for statement in split_sql_statements(migration_sql):
                 conn.execute(statement)
             conn.execute(
                 "INSERT INTO schema_migrations (version) VALUES (?)",
                 (version,),
             )
+        except Exception:
+            conn.rollback()
+            raise
+        else:
+            conn.commit()
         applied_now.append(version)
         applied.add(version)
 

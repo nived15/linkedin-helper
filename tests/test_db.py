@@ -1,36 +1,16 @@
 import sqlite3
+import re
 
-from linkedin_mcp.core.db import initialize_database, migrate
+from linkedin_mcp.core.db import MIGRATIONS_DIR, initialize_database, migrate
 
 
-EXPECTED_TABLES = {
-    "accounts",
-    "account_limits",
-    "working_hours",
-    "actions_log",
-    "safety_events",
-    "worker_heartbeat",
-    "leads",
-    "lead_contacts",
-    "lead_experience",
-    "lead_education",
-    "lead_skills",
-    "tags",
-    "lead_tags",
-    "lead_custom_fields",
-    "blacklist",
-    "campaigns",
-    "campaign_steps",
-    "templates",
-    "campaign_leads",
-    "jobs",
-    "ai_drafts",
-    "messages",
-    "webhooks",
-    "webhook_deliveries",
-    "harvest_runs",
-    "schema_migrations",
-}
+EXPECTED_TABLES = set(
+    re.findall(
+        r"CREATE TABLE IF NOT EXISTS ([a-z_]+)",
+        (MIGRATIONS_DIR / "0001_init.sql").read_text(encoding="utf-8"),
+    )
+)
+EXPECTED_TABLES.add("schema_migrations")
 
 
 def list_tables(conn: sqlite3.Connection) -> set[str]:
