@@ -146,17 +146,22 @@ async def test_browser_session(monkeypatch):
 def test_fingerprint_profile_is_stable_per_account():
     first = build_fingerprint_profile("linkedin", "seed@example.com")
     second = build_fingerprint_profile("linkedin", "seed@example.com")
+    catalog_user_agents = {profile.user_agent for profile in FINGERPRINT_CATALOG}
 
     assert first == second
     assert "Chrome/96.0.4664.110" not in first.user_agent
-    assert first.user_agent in {profile.user_agent for profile in FINGERPRINT_CATALOG}
+    assert first.user_agent in catalog_user_agents
     assert re.search(r"Chrome/\d{3}\.\d+\.\d+\.\d+", first.user_agent)
+    assert all(
+        re.search(r"Chrome/\d{3}\.\d+\.\d+\.\d+", user_agent)
+        for user_agent in catalog_user_agents
+    )
 
 
 def test_selectors_are_centralized_in_browser_module():
     source = inspect.getsource(linkedin_browser_mcp)
 
-    assert "Chrome/96.0.4664.110" not in source
+    assert not re.search(r"Chrome/\d{2,3}\.\d+\.\d+\.\d+", source)
     assert ".pv-top-card" not in source
     assert ".feed-shared-update-v2" not in source
     assert "selector_fallbacks" in source
