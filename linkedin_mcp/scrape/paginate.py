@@ -37,7 +37,9 @@ from typing import Any, Generic, Protocol, TypeVar
 
 from linkedin_mcp.audit import Outcome, log_action
 from linkedin_mcp.browser.humanize import Humanizer, get_humanizer
-from linkedin_mcp.browser.navigate import SessionExpiredError
+from linkedin_mcp.browser.navigate import (
+    assert_session_alive as navigate_assert_session_alive,
+)
 from linkedin_mcp.safety import guard_action
 
 logger = logging.getLogger(__name__)
@@ -67,8 +69,6 @@ MAX_SEARCH_PAGE = PLATFORM_RESULT_CEILING // RESULTS_PER_PAGE
 
 SCROLL_DISTANCE = 900
 """Pixels to scroll a results page before reading it, so lazy cards render."""
-
-AUTHWALL_MARKERS = ("/login", "/authwall", "/checkpoint", "/uas/login")
 
 T = TypeVar("T")
 
@@ -176,16 +176,25 @@ class PageRun(Generic[T]):
     gate_refusal: Mapping[str, Any] | None = None
 
 
-def assert_session_alive(page: Any) -> None:
+async def assert_session_alive(page: Any, *, account_id: int | None = None) -> None:
     """Raise when LinkedIn has bounced the session to a wall or a challenge.
 
     This propagates on purpose. A run that quietly returns zero results because
     the cookies expired looks exactly like a search with no matches, and the
     difference matters.
+
+    Raising is not enough on its own. An unrecorded halt leaves the account
+    looking healthy to the safety gate, so the next tool call walks straight back
+    into the same checkpoint. The markers, the account state change and the
+    `safety_events` row all live in `linkedin_mcp.safety.detect`, reached through
+    `linkedin_mcp.browser.navigate`, so this path records what it found instead of
+    keeping a second copy of the rules. A marker added there is picked up here.
+
+    `account_id` is optional so a caller without one still gets the check. The
+    halt is only written down when an id is supplied, because recording a
+    challenge against the wrong account would stop a session nobody challenged.
     """
-    current = getattr(page, "url", "") or ""
-    if any(marker in current for marker in AUTHWALL_MARKERS):
-        raise SessionExpiredError(f"Session expired: LinkedIn redirected to {current}")
+    await navigate_assert_session_alive(page, account_id=account_id)
 
 
 async def paginate(
@@ -276,7 +285,7 @@ async def paginate(
 
         await fetch(page, page_number)
         await pacer.settle()
-        assert_session_alive(page)
+        await assert_session_alive(page, account_id=account_id)
         pages_fetched += 1
 
         write(
