@@ -88,16 +88,32 @@ def lead(conn, account):
 
 TEMPLATES_DDL = re.compile(
     r"\balter\s+table\s+templates\b"
-    r"|\bcreate\s+table\s+(?:if\s+not\s+exists\s+)?templates\b",
+    r"|\bcreate\s+table\s+(?:if\s+not\s+exists\s+)?templates\b"
+    r"|\bcreate\s+unique\s+index\b[^;]*?\bon\s+templates\b",
     re.IGNORECASE,
 )
 
 
 def migrations_touching_templates(paths):
-    """Return migrations after 0001_init that create or alter `templates`.
+    """Return migrations after 0001_init that reshape the `templates` table.
 
-    Matches DDL only. A migration that merely references `templates (id)` in a
-    foreign key is another module's business and is not a drift signal here.
+    Matches three kinds of DDL, and the boundaries are chosen rather than
+    incidental:
+
+    * `CREATE TABLE templates` and `ALTER TABLE templates` change the columns
+      this package writes.
+    * `CREATE UNIQUE INDEX ... ON templates` changes what `create_template` is
+      allowed to insert, so it is drift even though the columns are untouched.
+      A unique index on `body` would start rejecting valid templates with no
+      change to this package at all.
+    * A plain `CREATE INDEX ... ON templates` is not matched. It is a read
+      optimisation and cannot make a stored template invalid.
+
+    A migration that merely references `templates (id)` in a foreign key is
+    another module's business and is not a drift signal here. The `[^;]` in the
+    unique-index branch keeps the match inside one statement, so a unique index
+    on some other table followed by a plain index on `templates` does not read
+    as a single match.
     """
     return [
         path
@@ -147,6 +163,39 @@ def test_the_no_migration_check_ignores_other_modules(tmp_path):
     assert [
         path.stem for path in migrations_touching_templates(migration_files(tmp_path))
     ] == ["0004_template_locale"]
+
+
+def test_a_unique_index_on_templates_counts_as_drift(tmp_path):
+    # A unique index adds no column but changes what `create_template` may
+    # insert, so it is drift. A plain index is a read optimisation and is not.
+    (tmp_path / "0003_template_index.sql").write_text(
+        "CREATE INDEX IF NOT EXISTS idx_templates_kind ON templates (kind);",
+        encoding="utf-8",
+    )
+    assert migrations_touching_templates(migration_files(tmp_path)) == []
+
+    (tmp_path / "0004_template_unique.sql").write_text(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_templates_body\n"
+        "    ON templates (account_id, body);",
+        encoding="utf-8",
+    )
+    assert [
+        path.stem for path in migrations_touching_templates(migration_files(tmp_path))
+    ] == ["0004_template_unique"]
+
+
+def test_a_unique_index_on_another_table_is_not_drift(tmp_path):
+    # The exact shape of SEQ-01's migration: a unique index on `jobs` in one
+    # statement, then a plain index on `templates` in the next. Matching across
+    # the statement boundary would read this as a unique index on templates.
+    (tmp_path / "0003_sequence_jobs.sql").write_text(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_one_open_job_per_lead\n"
+        "    ON jobs (lead_id) WHERE state = 'pending';\n"
+        "CREATE INDEX IF NOT EXISTS idx_templates_account\n"
+        "    ON templates (account_id);",
+        encoding="utf-8",
+    )
+    assert migrations_touching_templates(migration_files(tmp_path)) == []
 
 
 def test_templates_table_has_every_column_the_store_writes(conn):
