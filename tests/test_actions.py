@@ -152,6 +152,47 @@ def _is_mcp_tool(node: ast.AST) -> bool:
     return False
 
 
+# MCP-04 (#27) ---------------------------------------------------------------
+#
+# This guard used to look only for `@mcp.tool`, which meant the resource surface
+# added in #27 walked straight past it. Twelve `@mcp.resource` functions could
+# have driven a browser and this file would have stayed green while they did,
+# because the string `mcp.resource` appeared nowhere in it.
+#
+# A resource must never drive a page. It is a read: opening a browser to answer
+# one would be slow, would spend LinkedIn budget on something that changes
+# nothing, and would bypass the job queue that every write in this repository is
+# required to go through. So the walk below now covers both kinds.
+
+
+def _is_mcp_resource(node: ast.AST) -> bool:
+    for decorator in getattr(node, "decorator_list", []):
+        target = decorator.func if isinstance(decorator, ast.Call) else decorator
+        if isinstance(target, ast.Attribute) and target.attr == "resource":
+            return True
+    return False
+
+
+def _surface_kind(node: ast.AST) -> str | None:
+    """`"tool"`, `"resource"` or `None` for anything else."""
+    if _is_mcp_tool(node):
+        return "tool"
+    if _is_mcp_resource(node):
+        return "resource"
+    return None
+
+
+def mcp_surface_in(source: str, label: str = "<module>") -> dict[str, str]:
+    """Every MCP-registered function in one module, mapped to its kind."""
+    tree = ast.parse(source, filename=label)
+    return {
+        node.name: kind
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and (kind := _surface_kind(node)) is not None
+    }
+
+
 def _browser_names(tree: ast.Module) -> set[str]:
     """Names imported from a page-driving module, plus the browser classes."""
     names = set(BROWSER_CLASSES)
@@ -200,8 +241,10 @@ def _direct_evidence(node: ast.AST, browser_names: set[str]) -> list[str]:
     return evidence
 
 
-def playwright_reaching_tools(source: str, label: str = "<module>") -> dict[str, list[str]]:
-    """Return every `@mcp.tool()` in one module that can reach a page.
+def playwright_reaching_surface(
+    source: str, label: str = "<module>"
+) -> dict[str, list[str]]:
+    """Return every `@mcp.tool()` or `@mcp.resource()` that can reach a page.
 
     Follows calls into functions defined in the same module, because the way a
     tool would smuggle Playwright back in is through a helper rather than in the
@@ -237,29 +280,45 @@ def playwright_reaching_tools(source: str, label: str = "<module>") -> dict[str,
 
     offenders: dict[str, list[str]] = {}
     for node in ast.walk(tree):
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and _is_mcp_tool(node):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and _surface_kind(
+            node
+        ):
             evidence = reaches(node, {node.name})
             if evidence:
                 offenders[node.name] = evidence
     return offenders
 
 
+playwright_reaching_tools = playwright_reaching_surface
+"""Kept under the old name so a reader grepping for it still lands here.
+
+Before #27 this walked tools only. It now walks tools and resources, and the
+name that says so is `playwright_reaching_surface`.
+"""
+
+
 @pytest.mark.asyncio
 async def test_no_mcp_tool_in_the_server_can_drive_playwright():
     """The DoD line, checked rather than asserted.
 
-    Every `@mcp.tool()` in the repository, in every module that registers one,
-    with the session lifecycle exemption named explicitly so a reviewer can see
-    what is exempt and argue with it.
+    Every `@mcp.tool()` and, since #27, every `@mcp.resource()` in the
+    repository, in every module that registers one, with the session lifecycle
+    exemption named explicitly so a reviewer can see what is exempt and argue
+    with it.
+
+    The exemption is deliberately spent on tools only. A resource is a read and
+    no read needs a browser to create a session, so a resource that turned up in
+    the allowlist by sharing a name with an exempt tool would be a bug.
     """
     offenders: dict[str, list[str]] = {}
     for path in repo_modules():
-        found = playwright_reaching_tools(
-            path.read_text(encoding="utf-8"), str(path.relative_to(REPO_ROOT))
-        )
-        for name, evidence in found.items():
-            if name not in SESSION_LIFECYCLE_TOOLS:
-                offenders[f"{path.relative_to(REPO_ROOT)}::{name}"] = evidence
+        source = path.read_text(encoding="utf-8")
+        label = str(path.relative_to(REPO_ROOT))
+        kinds = mcp_surface_in(source, label)
+        for name, evidence in playwright_reaching_surface(source, label).items():
+            exempt = kinds.get(name) == "tool" and name in SESSION_LIFECYCLE_TOOLS
+            if not exempt:
+                offenders[f"{label}::{kinds.get(name, 'tool')} {name}"] = evidence
 
     assert offenders == {}, (
         "these MCP tools reach Playwright; they must enqueue a job instead:\n"
@@ -287,6 +346,35 @@ async def test_the_guard_finds_the_tools_it_claims_to_be_guarding():
 
 
 @pytest.mark.asyncio
+async def test_the_guard_finds_the_resources_it_claims_to_be_guarding():
+    """MCP-04 (#27): the same non-vacuity check, for the resource half.
+
+    PR #51 is the reason this exists. Fifteen tools were fully tested against a
+    FastMCP instance the tests built themselves and stayed green for weeks while
+    the shipped server never registered them. So the count here is taken from
+    `linkedin_browser_mcp.mcp`, the object the process actually serves, and
+    compared against what the source walk found.
+    """
+    found: set[str] = set()
+    for path in repo_modules():
+        found.update(
+            name
+            for name, kind in mcp_surface_in(
+                path.read_text(encoding="utf-8"), str(path)
+            ).items()
+            if kind == "resource"
+        )
+
+    assert len(found) >= 12, sorted(found)
+
+    served = await linkedin_browser_mcp.mcp.list_resources()
+    templates = await linkedin_browser_mcp.mcp.list_resource_templates()
+    assert len(served) + len(templates) == 12
+    assert all(str(resource.uri).startswith("linkedin://") for resource in served)
+    assert all(item.uri_template.startswith("linkedin://") for item in templates)
+
+
+@pytest.mark.asyncio
 async def test_the_guard_catches_a_tool_that_drives_a_page():
     """The same walk, against a module that does what the guard forbids."""
     smuggled = '''
@@ -299,7 +387,7 @@ def helper(page):
 async def like_a_post(post_url: str) -> dict:
     return await helper(page)
 '''
-    assert playwright_reaching_tools(smuggled, "smuggled.py")
+    assert playwright_reaching_surface(smuggled, "smuggled.py")
 
     obvious = '''
 @mcp.tool()
@@ -307,14 +395,106 @@ async def like_a_post(post_url: str) -> dict:
     page = await session.new_page(post_url)
     return {"status": "success"}
 '''
-    assert playwright_reaching_tools(obvious, "obvious.py")
+    assert playwright_reaching_surface(obvious, "obvious.py")
 
     innocent = '''
 @mcp.tool()
 async def like_a_post(post_url: str) -> dict:
     return enqueue_action("post_like", {"post_url": post_url})
 '''
-    assert playwright_reaching_tools(innocent, "innocent.py") == {}
+    assert playwright_reaching_surface(innocent, "innocent.py") == {}
+
+
+@pytest.mark.asyncio
+async def test_the_guard_catches_a_resource_that_drives_a_page():
+    """MCP-04 (#27): three ways a resource could reach a page, all caught.
+
+    Directly, through one helper, and through two. The two-hop case is the one
+    worth having: a resource that called a formatting helper that happened to
+    call a scraping helper is how this would arrive in real life, and it is
+    invisible to anything that only reads the decorated function body.
+    """
+    direct = '''
+@mcp.resource("linkedin://campaigns")
+async def campaigns_resource() -> str:
+    page = await session.new_page("https://www.linkedin.com/feed/")
+    return "{}"
+'''
+    assert playwright_reaching_surface(direct, "direct.py") == {
+        "campaigns_resource": ["page method .new_page()"]
+    }
+
+    one_hop = '''
+from linkedin_mcp.executors.support import wait_for_selector_fallback
+
+def scrape(page):
+    return wait_for_selector_fallback(page, "campaign_card")
+
+@mcp.resource("linkedin://campaigns")
+async def campaigns_resource() -> str:
+    return await scrape(page)
+'''
+    assert "campaigns_resource" in playwright_reaching_surface(one_hop, "one_hop.py")
+
+    two_hops = '''
+from linkedin_mcp.browser import BrowserSession
+
+def open_page():
+    return BrowserSession()
+
+def gather():
+    return open_page()
+
+@mcp.resource("linkedin://campaigns")
+async def campaigns_resource() -> str:
+    return gather()
+'''
+    evidence = playwright_reaching_surface(two_hops, "two_hops.py")
+    assert "campaigns_resource" in evidence
+    assert "via gather()" in evidence["campaigns_resource"][0]
+
+    innocent = '''
+@mcp.resource("linkedin://campaigns")
+async def campaigns_resource() -> str:
+    return json.dumps(campaigns_overview(tool_connection(), tool_account_id()))
+'''
+    assert playwright_reaching_surface(innocent, "innocent.py") == {}
+
+
+@pytest.mark.asyncio
+async def test_the_resource_guard_is_non_vacuous_against_the_real_module():
+    """MCP-04 (#27): mutate the shipped resource module and watch the guard bite.
+
+    The snippets above prove the walk works on strings someone wrote to be
+    caught. This proves it works on the file that actually registers the twelve
+    resources, by appending a page-driving resource to a copy of its real source
+    and re-running the same walk the repository-wide guard runs.
+
+    The mutation is asserted to have landed, and the mutated source is asserted
+    to still parse, before the result is read. A syntactically broken injection
+    would fail the walk for the wrong reason and prove nothing.
+    """
+    path = REPO_ROOT / "linkedin_mcp" / "resources" / "server.py"
+    source = path.read_text(encoding="utf-8")
+    label = str(path.relative_to(REPO_ROOT))
+
+    assert playwright_reaching_surface(source, label) == {}
+
+    mutation = (
+        "\n\n"
+        "@mcp.resource('linkedin://campaigns/scraped')\n"
+        "async def scraped_campaigns() -> str:\n"
+        "    page = await session.new_page('https://www.linkedin.com/feed/')\n"
+        "    return await page.query_selector_all('.campaign')\n"
+    )
+    mutated = source + mutation
+
+    assert "scraped_campaigns" in mutated
+    ast.parse(mutated, filename=label)
+
+    caught = playwright_reaching_surface(mutated, label)
+    assert "scraped_campaigns" in caught, caught
+    assert path.read_text(encoding="utf-8") == source
 
 
 @pytest.mark.asyncio

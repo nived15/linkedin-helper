@@ -163,6 +163,7 @@ mcp-linkedin-server/
 │   ├── browser/                 # Humanised pacing, navigation, selector registry
 │   ├── core/                    # Config, database, migrations
 │   ├── leads/                   # Lead store, dedupe, blacklist, cache windows
+│   ├── resources/               # The twelve read-only linkedin:// MCP resources
 │   ├── safety/                  # The gate that answers before any action runs
 │   ├── scrape/                  # Search result extraction (people, posts, groups)
 │   └── tools/                   # MCP tool surface: harvest queueing and CRM reads
@@ -349,6 +350,59 @@ The selectors for these surfaces are hypotheses written from LinkedIn's publishe
 markup rather than checked against a live session, which is why every one of them
 is a fallback chain and why a missing optional field reads as `None` rather than
 raising. A wrong guess costs a slice, not the run.
+
+---
+
+## MCP Resources Reference
+
+Tools are verbs. Resources are nouns: twelve read-only `linkedin://...` URIs that
+return live SQLite state as JSON, registered in `linkedin_mcp/resources/`. A
+client can watch a campaign without being handed a button that changes it.
+
+| URI | What it returns |
+| --- | --- |
+| `linkedin://campaigns` | Every campaign this account owns, each with its funnel |
+| `linkedin://campaigns/{id}` | One campaign: status, derived flags, steps, funnel, due work |
+| `linkedin://campaigns/{id}/funnel` | That campaign's sub-list populations on their own |
+| `linkedin://leads/active` | Leads that are not blacklisted, with in-flight counts |
+| `linkedin://leads/{id}` | One lead: fields, tags, campaign memberships, message history |
+| `linkedin://drafts/pending` | Drafts waiting on a human, plus depths for every other status |
+| `linkedin://inbox/unread` | Leads whose newest stored message is inbound |
+| `linkedin://worker/status` | Heartbeats, queue depths, and which workers have stalled |
+| `linkedin://stats/daily` | What this account did since midnight UTC |
+| `linkedin://analytics/weekly` | The last seven days, by day, action and campaign |
+| `linkedin://safety/today` | Remaining headroom per action type, and the binding ceiling |
+| `linkedin://templates` | Stored templates by kind |
+
+Three details are worth knowing before you read one.
+
+**Campaign status words mislead, so the payload carries booleans.** Approving a
+campaign moves it to `pending_approval` and starting it moves it to `active`, so
+`pending_approval` means "approved, waiting to be started". Read `approved`,
+`runnable` and `editable` instead of the status word. They come from the same
+derivation the `campaign_status` tool uses, so the two surfaces cannot drift.
+
+**"Unread" is defined, not scraped.** The `messages` table has no read marker and
+nothing in this repository reads message content without a browser, which a
+resource may never open. So unread means the lead's newest stored message is
+inbound: they replied and nothing outbound has been recorded since. That excludes
+LinkedIn's own unread badge, threads no scan has archived, and replies answered
+outside this system until the next scan catches up.
+
+**Updates are pushed only to a client that asked.** A client that declares
+`capabilities.experimental.resources.subscribe` during `initialize` receives
+`notifications/resources/updated` when a URI it has read changes. Everyone else
+gets the same news in the body: every payload carries an `updates` block naming
+how long to wait and which URIs moved since that client last looked.
+
+Resources open no browser and write no `actions_log` row. Both are enforced by
+tests rather than convention: `tests/test_actions.py` fails the build if a
+resource can reach Playwright through any chain of helpers, and
+`tests/test_audit_log.py` records the audit exemption explicitly along with a
+test that no resource takes a LinkedIn action. The exemption exists because
+`actions_log` is the rate limiter's ledger; auditing a read would spend budget
+nobody used, and `linkedin://safety/today` would report headroom its own readers
+had consumed.
 
 ---
 

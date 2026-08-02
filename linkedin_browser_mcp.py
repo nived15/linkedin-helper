@@ -520,6 +520,34 @@ async def comment_on_approved_posts(approved_posts: list, ctx: Context) -> dict:
     }
 
 
+# MCP-04 (#27) -----------------------------------------------------------------
+#
+# Appended as one contiguous block at the foot of the file rather than added to
+# the registration lines near the top. PR #51 is repairing that block in a
+# parallel branch (fifteen merged tools were never registered), and the repo
+# convention after wave 6 is that a parallel change appends somewhere else in
+# the file entirely. Registration order does not matter: every one of these runs
+# at import, before `mcp.run` is reached.
+#
+# These are resources, not tools. Nothing below opens a browser, spends an
+# action budget or writes an `actions_log` row; each one reads SQLite and
+# returns JSON. `tests/test_actions.py` walks every `@mcp.resource` in the tree
+# the same way it walks every `@mcp.tool` and fails the build if that stops
+# being true, and `tests/test_audit_log.py` records the audit exemption
+# explicitly rather than leaving it to look like an oversight.
+
+from linkedin_mcp.resources import register_linkedin_resources  # noqa: E402
+
+linkedin_resource_notifier = register_linkedin_resources(mcp)
+"""Kept as a module attribute so the notifier's session memory is reachable.
+
+`notifications/resources/updated` goes only to a client that declared
+`capabilities.experimental.resources.subscribe` in its handshake; everything
+else is told, in the body of every resource it reads, how long to wait before
+re-reading and which URIs moved since it last looked.
+"""
+
+
 if __name__ == "__main__":
     try:
         logger.debug("Starting LinkedIn MCP Server with debug logging")
