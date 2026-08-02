@@ -4,6 +4,7 @@ Pure syntax, spintax, variation and style behaviour lives in
 `tests/test_templating.py`.
 """
 
+import re
 import sqlite3
 
 import pytest
@@ -85,14 +86,67 @@ def lead(conn, account):
 # The schema SEQ-02 builds on, unchanged
 # --------------------------------------------------------------------------
 
+TEMPLATES_DDL = re.compile(
+    r"\balter\s+table\s+templates\b"
+    r"|\bcreate\s+table\s+(?:if\s+not\s+exists\s+)?templates\b",
+    re.IGNORECASE,
+)
+
+
+def migrations_touching_templates(paths):
+    """Return migrations after 0001_init that create or alter `templates`.
+
+    Matches DDL only. A migration that merely references `templates (id)` in a
+    foreign key is another module's business and is not a drift signal here.
+    """
+    return [
+        path
+        for path in paths
+        if path.stem != "0001_init"
+        and TEMPLATES_DDL.search(path.read_text(encoding="utf-8"))
+    ]
+
 
 def test_seq_02_adds_no_migration():
     # `templates` already exists in 0001_init.sql and is shaped for this feature,
-    # so a third migration would mean the design drifted.
-    assert [path.stem for path in migration_files()] == [
-        "0001_init",
-        "0002_lead_dedupe",
-    ]
+    # so a migration reshaping it would mean the design drifted.
+    #
+    # The claim is deliberately local. An earlier version asserted the complete
+    # migration list, which made this SEQ-02 test fail the moment SEQ-01 landed
+    # a legitimate migration of its own. That is a false positive aimed at the
+    # wrong author, and the tempting fix is to delete the test rather than read
+    # it. Other modules may add all the migrations they like.
+    stems = [path.stem for path in migration_files()]
+    assert stems[:2] == ["0001_init", "0002_lead_dedupe"]
+    assert migrations_touching_templates(migration_files()) == []
+
+
+def test_the_no_migration_check_ignores_other_modules(tmp_path):
+    (tmp_path / "0001_init.sql").write_text(
+        "CREATE TABLE IF NOT EXISTS templates (id INTEGER PRIMARY KEY);",
+        encoding="utf-8",
+    )
+    # Shaped like SEQ-01's migration: a new index and a table that merely points
+    # at `templates`. Neither is SEQ-02 drift, so neither may trip this check.
+    (tmp_path / "0003_sequence_jobs.sql").write_text(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_one_open_job_per_lead\n"
+        "    ON jobs (lead_id) WHERE state = 'pending';\n"
+        "CREATE TABLE IF NOT EXISTS job_quarantine (\n"
+        "    job_id INTEGER NOT NULL,\n"
+        "    template_id INTEGER,\n"
+        "    FOREIGN KEY (template_id) REFERENCES templates (id)\n"
+        ");",
+        encoding="utf-8",
+    )
+    assert migrations_touching_templates(migration_files(tmp_path)) == []
+
+    # Reshaping the table itself is drift, and this still catches it.
+    (tmp_path / "0004_template_locale.sql").write_text(
+        "ALTER TABLE templates ADD COLUMN locale TEXT;", encoding="utf-8"
+    )
+    assert [
+        path.stem for path in migrations_touching_templates(migration_files(tmp_path))
+    ] == ["0004_template_locale"]
 
 
 def test_templates_table_has_every_column_the_store_writes(conn):
