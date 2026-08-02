@@ -277,6 +277,48 @@ roughly 40 per 24 hours cap applies to direct profile loads under `/in/`, not to
 result pages, and the query string is the only place the full filter set can be
 expressed.
 
+### Lead harvesting sources
+
+Six more sources sit beside the searches, all of them lists of people rather than
+result pages. They share one engine, `run_people_list_harvest` in
+`linkedin_mcp/scrape/sources.py`, which describes a surface as selectors plus the
+gesture that reveals the next slice and hands the walking to the same paginator.
+
+| Function | Surface | Budget spent |
+| --- | --- | --- |
+| `run_post_engager_harvest` | a post's reactions modal and comment list | `post_read` |
+| `run_event_attendee_harvest` | `/events/<id>/attendees/` | `profile_search` |
+| `run_company_employee_harvest` | `/company/<slug>/people/` | `profile_search` |
+| `run_connection_harvest` | your own connections | `profile_search` |
+| `run_follower_harvest` | your followers | `profile_search` |
+| `import_leads_from_csv` | a local file | none |
+
+Post engagers are the one worth the most attention. Someone who reacted to a post
+about enterprise Copilot rollouts three days ago has said what they care about
+and when, which a job title never does. A combined run reads the reactions modal
+first and the comment list second, and the second phase starts from the first
+phase's seen keys, so a person who both reacted and commented is one lead rather
+than two. The `limit` covers the post as a whole, so a post with 600 reactions
+and 40 comments asked for 100 engagers returns 100, not 200.
+
+Every source stores through the same `harvest_leads` path, so the same person
+found on a post today and at an event tomorrow resolves onto one row and anyone
+on the do-not-contact blacklist is refused wherever they turn up.
+
+CSV import is the exception that proves the metering rule. It asks no safety
+gate, because reading a local file does nothing to LinkedIn and spending a
+browsing budget on it would misreport what the account did. It still goes through
+the lead store and still respects the blacklist. Bad rows are reported by line
+number and skipped; a file whose header carries no column that could identify a
+LinkedIn person raises instead, because importing nothing from it silently would
+be worse than failing. The summary reports imported, skipped, refused and
+duplicate counts that add back up to the rows read.
+
+The selectors for these surfaces are hypotheses written from LinkedIn's published
+markup rather than checked against a live session, which is why every one of them
+is a fallback chain and why a missing optional field reads as `None` rather than
+raising. A wrong guess costs a slice, not the run.
+
 ---
 
 ## Setup

@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updatedAt": "2026-08-02T09:55:12.944Z",
+  "updatedAt": "2026-08-02T11:33:14.185Z",
   "tasks": {
     "CORE-01": {
       "status": "done",
@@ -82,9 +82,11 @@
       "issueNumber": 16
     },
     "SCRAPE-04": {
-      "status": "pending",
+      "status": "done",
       "notes": "",
-      "issueNumber": 17
+      "issueNumber": 17,
+      "prNumber": 41,
+      "prMerged": true
     },
     "SEQ-01": {
       "status": "pending",
