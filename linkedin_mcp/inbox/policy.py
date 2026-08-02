@@ -43,7 +43,7 @@ from datetime import datetime
 from typing import Any
 
 from linkedin_mcp.inbox.errors import PollIntervalTooShortError
-from linkedin_mcp.scrape.paginate import SearchCursor
+from linkedin_mcp.scrape.paginate import SearchCursor, StopReason
 from linkedin_mcp.sequences.transaction import now_timestamp, shift_timestamp
 
 logger = logging.getLogger(__name__)
@@ -156,6 +156,7 @@ class InboxScanState:
     cursor: SearchCursor = field(default_factory=SearchCursor)
     threads_seen: int = 0
     stop_reason: str | None = None
+    backfill: bool = False
 
     @property
     def first_run(self) -> bool:
@@ -163,9 +164,50 @@ class InboxScanState:
         return self.last_scan_at is None
 
     @property
+    def refused(self) -> bool:
+        """True when the safety gate cut the previous run short."""
+        return self.stop_reason == StopReason.GATE_REFUSED.value
+
+    @property
+    def resuming(self) -> bool:
+        """True when the previous walk stopped with more of the list left to see.
+
+        Two stops mean that. The gate refusing is one: the run stopped partway
+        down. A delta reaching its own much smaller limit is the other: more
+        threads changed than one delta was allowed to handle, so there is a
+        backlog underneath the ones it took. A backfill reaching its two hundred
+        is not, because that is the walk finishing rather than being cut off.
+
+        Getting this wrong is how the delta path quietly loses work. If the next
+        run started from the top it would meet only threads the watermark
+        already knows, stop on its first slice, and abandon everything below the
+        interruption for good.
+        """
+        if self.refused:
+            return True
+        if self.stop_reason == StopReason.COUNT_REACHED.value:
+            return not self.backfill
+        return False
+
+    @property
+    def resume_page(self) -> int:
+        """Slice the next run should start from.
+
+        Resuming does not skip the top of the list. The fetch reveals every
+        slice up to this one and the extractor reads all of them, so a reply
+        that landed at the top since the interruption is still seen.
+        """
+        return self.cursor.page if self.resuming else 1
+
+    @property
+    def backfilling(self) -> bool:
+        """True when the next run is still part of the initial 200 thread walk."""
+        return self.first_run or (self.resuming and self.backfill)
+
+    @property
     def thread_limit(self) -> int:
         """Threads the next run should look at."""
-        return FIRST_RUN_THREAD_LIMIT if self.first_run else DELTA_THREAD_LIMIT
+        return FIRST_RUN_THREAD_LIMIT if self.backfilling else DELTA_THREAD_LIMIT
 
     @property
     def seen_keys(self) -> tuple[str, ...]:
@@ -257,6 +299,7 @@ def read_scan_state(
         cursor=SearchCursor.from_dict(params.get("cursor")),
         threads_seen=int(row["found_count"] or 0),
         stop_reason=filters.get("stop_reason"),
+        backfill=bool(filters.get("backfill", False)),
     )
 
 

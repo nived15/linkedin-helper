@@ -18,6 +18,21 @@ twenty. A thread with a new message presents a different key, because the key
 carries a change signature as well as the thread's address, so it is fresh and
 gets opened.
 
+Those two behaviours fight each other whenever a walk is cut short, and it is
+worth naming. A run the gate refused stopped partway down the list, having
+archived the top of it and nothing below. A delta that hit its own much smaller
+limit left a backlog underneath the threads it took. In both cases, if the next
+run started from the top it would meet only threads the watermark already knows,
+stop on its first slice, and abandon everything below the interruption for good.
+That is how a two hundred thread backfill silently becomes a fifty thread one.
+
+So an interrupted walk is resumed from the slice it stopped on, at the limit it
+was originally given, until it finishes. Resuming does not skip the top of the
+list: the fetch reveals every slice up to the resume point and the extractor
+reads all of them, so a reply that landed at the top in the meantime is still
+seen. A backfill that reached its two hundred is not an interruption, it is the
+walk finishing, and it goes back to ordinary deltas.
+
 Budget: `feed_browse`
 ---------------------
 Deliberate, and it is a trade-off worth stating. `message` is the semantically
@@ -74,6 +89,7 @@ from linkedin_mcp.inbox.threads import (
     InboxThread,
     list_thread_rows,
     open_thread,
+    opened_the_right_thread,
     read_thread_messages,
 )
 from linkedin_mcp.scrape.extract import query_first
@@ -126,6 +142,8 @@ class InboxScanReport:
     first_run: bool
     poll_seconds: int
     stop_reason: StopReason
+    backfill: bool = False
+    resumed: bool = False
     cursor: SearchCursor = field(default_factory=SearchCursor)
     slices_fetched: int = 0
     threads_seen: int = 0
@@ -160,6 +178,8 @@ class InboxScanReport:
             "source": INBOX_SOURCE,
             "action_type": INBOX_ACTION,
             "first_run": self.first_run,
+            "backfill": self.backfill,
+            "resumed": self.resumed,
             "poll_seconds": self.poll_seconds,
             "stop_reason": self.stop_reason.value,
             "slices_fetched": self.slices_fetched,
@@ -264,11 +284,21 @@ async def run_inbox_scan(
         strict=strict_interval,
     )
     first_run = previous.first_run
+    backfilling = previous.backfilling
+    resuming = cursor is None and previous.resuming
     wanted = int(limit) if limit is not None else previous.thread_limit
     if wanted < 1:
         raise ValueError(f"an inbox scan needs to look at at least one thread, got {wanted}")
 
-    resume = cursor if cursor is not None else SearchCursor(seen_keys=previous.seen_keys)
+    # A refused run stopped partway down the list, so this one continues from
+    # the slice it stopped on. Starting from the top would meet only threads the
+    # watermark already knows, stop on the first slice, and abandon everything
+    # below the interruption.
+    resume = (
+        cursor
+        if cursor is not None
+        else SearchCursor(page=previous.resume_page, seen_keys=previous.seen_keys)
+    )
 
     watermark: dict[str, str] = {}
     handles: dict[str, Any] = {}
@@ -315,6 +345,11 @@ async def run_inbox_scan(
             await assert_session_alive(
                 page, account_id=account_id, action_type=INBOX_ACTION
             )
+            if not opened_the_right_thread(page, thread):
+                # The pane is still showing somebody else. Reading it now would
+                # archive their messages against this lead.
+                unreadable.append(thread.thread_urn)
+                continue
             opened += 1
 
             messages = await read_thread_messages(page, thread)
@@ -337,6 +372,22 @@ async def run_inbox_scan(
                 )
                 continue
 
+            # Stopping the sequence comes before archiving, and the order is the
+            # point. Both are separate transactions, so whichever runs second
+            # leaves a window in which a worker could lease the follow-up and
+            # send it. Losing that race must cost an archived row, not a message
+            # to a person who has already answered.
+            if opened_thread.has_reply:
+                replies += 1
+                replied_leads.append(lead.id)
+                if terminate_on_reply:
+                    stopped.extend(
+                        (campaign_id, lead.id)
+                        for campaign_id in terminate_sequences(
+                            conn, account_id, lead.id, now=tick()
+                        )
+                    )
+
             result = archive_thread(
                 conn,
                 account_id,
@@ -346,25 +397,14 @@ async def run_inbox_scan(
             )
             archived += result.inserted
             already_stored += result.skipped
-
-            if not opened_thread.has_reply:
-                continue
-            replies += 1
-            replied_leads.append(lead.id)
-            if not terminate_on_reply:
-                continue
-            stopped.extend(
-                (campaign_id, lead.id)
-                for campaign_id in terminate_sequences(
-                    conn, account_id, lead.id, now=tick()
-                )
-            )
         logger.debug("Inbox slice %d handled %d changed thread(s)", step, len(threads))
 
     run_params: dict[str, Any] = {
         "url": INBOX_URL,
         "poll_seconds": interval,
         "first_run": first_run,
+        "backfill": backfilling,
+        "resumed": resuming,
         "terminate_on_reply": terminate_on_reply,
     }
     if manage_run and run_id is None:
@@ -432,6 +472,8 @@ async def run_inbox_scan(
         first_run=first_run,
         poll_seconds=interval,
         stop_reason=run.stop_reason,
+        backfill=backfilling,
+        resumed=resuming,
         cursor=run.cursor,
         slices_fetched=run.pages_fetched,
         threads_seen=run.results_seen,

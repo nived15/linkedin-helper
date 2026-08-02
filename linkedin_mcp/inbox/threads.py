@@ -45,6 +45,7 @@ import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
+from urllib.parse import unquote
 
 from linkedin_mcp.inbox.policy import thread_key
 from linkedin_mcp.scrape.extract import attr_of, query_all, query_first, text_of
@@ -60,11 +61,14 @@ logger = logging.getLogger(__name__)
 __all__ = [
     "INBOUND",
     "OUTBOUND",
+    "PARTICIPANT_PREFIX",
     "InboxThread",
     "ThreadMessage",
     "extract_threads",
     "list_thread_rows",
     "open_thread",
+    "opened_the_right_thread",
+    "participant_alias",
     "read_thread_messages",
     "thread_urn_from",
 ]
@@ -84,18 +88,35 @@ def thread_urn_from(text: str | None) -> str | None:
     that appears both in the row's `href` and, on newer markup, in a data
     attribute. Either form resolves to the same key, so a list that changes
     which one it renders does not split one thread into two.
+
+    The key is percent-decoded and stripped of a trailing slash for the same
+    reason. `urn%3Ali%3Amsg_conversation%3A7` and `urn:li:msg_conversation:7`
+    are one conversation, and archiving is keyed on this value, so letting them
+    differ would duplicate every message in the thread.
     """
     if not text:
         return None
-    candidate = text.strip()
+    candidate = unquote(text.strip())
     if not candidate:
         return None
     match = THREAD_URN_PATTERN.search(candidate)
     if match:
-        return match.group("thread")
+        return match.group("thread").rstrip("/") or None
     if candidate.startswith("urn:li:"):
-        return candidate
+        return candidate.rstrip("/")
     return None
+
+
+PARTICIPANT_PREFIX = "participant:"
+"""Prefix of the identity a conversation with no address of its own falls back to."""
+
+
+def participant_alias(
+    public_id: str | None, member_id: str | None = None
+) -> str | None:
+    """Return the fallback address a conversation with no thread URN gets."""
+    key = public_id or member_id
+    return None if not key else f"{PARTICIPANT_PREFIX}{key}"
 
 
 def _stamp(value: str | None) -> str | None:
@@ -166,14 +187,19 @@ class InboxThread:
     def signature(self) -> str:
         """A change detector readable off the list row without opening the thread.
 
-        The preview text and the rendered activity label are what LinkedIn
-        updates when a new message lands, so a thread whose signature is
-        unchanged has nothing new in it. Unread state joins them because marking
-        a thread read is also a change worth noticing.
+        The preview snippet and the unread badge, and deliberately *not* the
+        rendered activity label. That label is relative: an untouched thread
+        reading "2h" today reads "5h" three hours later, so folding it in would
+        make every thread look changed on every scan and turn the delta path
+        back into a full re-read of the inbox. The bug would not show up in a
+        test with fixed labels either, which is why it is called out here.
+
+        What is left changes exactly when it should. The snippet is the last
+        message in the conversation, so it moves when a message arrives, and the
+        unread badge moves when one arrives unread.
         """
         return "|".join(
             (
-                _signature_part(self.last_activity_text),
                 _signature_part(self.preview),
                 "unread" if self.unread else "read",
             )
@@ -193,11 +219,30 @@ class InboxThread:
         return bool(self.inbound_messages)
 
     def with_messages(self, messages: tuple[ThreadMessage, ...]) -> "InboxThread":
-        """Return a copy carrying the messages read out of the open conversation."""
+        """Return a copy carrying the messages read out of the open conversation.
+
+        The participant's public id is filled in from the messages when the list
+        row did not carry a `/in/` link but did carry a name. Without this a
+        known lead whose row renders no link would be reported as a stranger and
+        its queued follow-up would survive, which is the failure this whole
+        issue exists to prevent.
+
+        Only a name match is trusted. Taking any sender's slug would risk
+        picking up Nived's own, resolving the thread to his own lead row and
+        stopping his sequences.
+        """
+        public_id = self.participant_public_id
+        if public_id is None and self.participant_name:
+            wanted = self.participant_name.strip().casefold()
+            for message in messages:
+                name = (message.sender_name or "").strip().casefold()
+                if name and name == wanted and message.sender_public_id:
+                    public_id = message.sender_public_id
+                    break
         return InboxThread(
             thread_urn=self.thread_urn,
             participant_name=self.participant_name,
-            participant_public_id=self.participant_public_id,
+            participant_public_id=public_id,
             participant_member_id=self.participant_member_id,
             participant_profile_url=self.participant_profile_url,
             preview=self.preview,
@@ -230,7 +275,7 @@ async def _thread_from_row(item: Any) -> InboxThread | None:
     if thread_urn is None:
         # A conversation with no address of its own can still be identified by
         # who it is with, which is enough to archive against and to deduplicate.
-        thread_urn = f"participant:{public_id or member_id}" if (public_id or member_id) else None
+        thread_urn = participant_alias(public_id, member_id)
     if thread_urn is None:
         logger.debug("Skipping an inbox row with neither a thread address nor a participant")
         return None
@@ -284,6 +329,9 @@ async def open_thread(page: Any, handle: Any, pacer: Any) -> bool:
     A row that has scrolled out of the DOM since it was read is a miss rather
     than a failure: the next scan sees the thread again, because nothing was
     written for it and so nothing entered the watermark.
+
+    A click that did not throw is not the same as the right conversation being
+    on screen, which is what :func:`opened_the_right_thread` is for.
     """
     if handle is None:
         return False
@@ -299,6 +347,35 @@ async def open_thread(page: Any, handle: Any, pacer: Any) -> bool:
         logger.warning("Opening an inbox thread failed: %s", error)
         return False
     return True
+
+
+def opened_the_right_thread(page: Any, thread: "InboxThread") -> bool:
+    """Return False when the route names a conversation other than this one.
+
+    Messaging is a single page application, so the right hand pane can still be
+    showing the previous conversation when the click returns. Reading it then
+    would archive one person's messages against another person's lead, which is
+    the worst thing this module could do quietly.
+
+    The address bar is the check. When it names a conversation and that is not
+    the one that was clicked, this reports a miss and the caller leaves the
+    thread out of the watermark so the next scan tries it again. When the route
+    carries no conversation address at all there is nothing to check against and
+    the pane is accepted, which is a documented gap rather than a silent one.
+    """
+    url = getattr(page, "url", None)
+    if not isinstance(url, str):
+        return True
+    showing = thread_urn_from(url)
+    if showing is None or showing == thread.thread_urn:
+        return True
+    logger.warning(
+        "Asked for conversation %s but the page is showing %s; leaving it for "
+        "the next scan rather than archiving somebody else's messages",
+        thread.thread_urn,
+        showing,
+    )
+    return False
 
 
 async def _sender_of(item: Any) -> tuple[str | None, str | None]:

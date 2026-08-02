@@ -63,6 +63,7 @@ class Thread:
         messages: list[dict[str, Any]] | None = None,
         thread_href: str | None = None,
         openable: bool = True,
+        opens_as: str | None = None,
     ) -> None:
         self.thread_id = thread_id
         self.slug = slug
@@ -73,6 +74,10 @@ class Thread:
         self.messages = list(messages or [])
         self.thread_href = thread_href
         self.openable = openable
+        # Which conversation the right hand pane actually ends up showing. The
+        # messaging UI is a single page application, so a slow update leaves the
+        # previous conversation on screen after the click has returned.
+        self.opens_as = opens_as
 
     def touch(self, preview: str, *, timestamp: str | None = None) -> "Thread":
         """Return the same conversation with new activity in it."""
@@ -86,7 +91,16 @@ class Thread:
             messages=list(self.messages),
             thread_href=self.thread_href,
             openable=self.openable,
+            opens_as=self.opens_as,
         )
+
+    def restamp(self, timestamp: str) -> "Thread":
+        """Return the same conversation with only its relative label moved on.
+
+        Nothing happened in it. "2h" simply became "5h" because three hours
+        passed, which is what every thread in a real inbox does between scans.
+        """
+        return self.touch(self.preview, timestamp=timestamp)
 
     def row(self, page: "InboxPage") -> Row:
         children: list[FakeElement] = []
@@ -177,6 +191,7 @@ class InboxPage(FakePage):
         self.per_slice = max(1, per_slice)
         self.revealed = self.per_slice
         self.opens: list[str] = []
+        self.showing: list[str] = []
         self.open_id: str | None = None
         self.scrolls = 0
         self.reveals = 0
@@ -198,7 +213,12 @@ class InboxPage(FakePage):
         self.revealed = min(len(self.threads), self.revealed + self.per_slice)
 
     def open(self, thread_id: str) -> None:
-        self.open_id = thread_id
+        """Click a conversation, and show whichever pane the UI actually loads."""
+        thread = self.thread(thread_id)
+        showing = thread.opens_as if thread and thread.opens_as else thread_id
+        self.open_id = showing
+        self.showing.append(showing)
+        self.url = f"https://www.linkedin.com/messaging/thread/{showing}/"
         self.opens.append(thread_id)
 
     def thread(self, thread_id: str) -> Thread | None:

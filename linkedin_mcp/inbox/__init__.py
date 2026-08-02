@@ -71,6 +71,7 @@ from linkedin_mcp.inbox.archive import (
     ArchiveResult,
     archive_thread,
     existing_message_keys,
+    thread_identities,
 )
 from linkedin_mcp.inbox.errors import InboxError, PollIntervalTooShortError
 from linkedin_mcp.inbox.matching import (
@@ -106,11 +107,14 @@ from linkedin_mcp.inbox.scan import (
 from linkedin_mcp.inbox.threads import (
     INBOUND,
     OUTBOUND,
+    PARTICIPANT_PREFIX,
     InboxThread,
     ThreadMessage,
     extract_threads,
     list_thread_rows,
     open_thread,
+    opened_the_right_thread,
+    participant_alias,
     read_thread_messages,
     thread_urn_from,
 )
@@ -131,6 +135,7 @@ __all__ = [
     "InboxThread",
     "MIN_POLL_SECONDS",
     "OUTBOUND",
+    "PARTICIPANT_PREFIX",
     "PollIntervalTooShortError",
     "REPLY_DETAIL",
     "ThreadMatch",
@@ -144,6 +149,8 @@ __all__ = [
     "match_thread",
     "next_scan_at",
     "open_thread",
+    "opened_the_right_thread",
+    "participant_alias",
     "read_scan_state",
     "read_thread_messages",
     "resolve_lead",
@@ -151,6 +158,7 @@ __all__ = [
     "run_inbox_scan",
     "scan_due",
     "terminate_sequences",
+    "thread_identities",
     "thread_key",
     "thread_urn_from",
     "trim_watermark",

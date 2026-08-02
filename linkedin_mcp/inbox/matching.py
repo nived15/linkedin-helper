@@ -134,15 +134,30 @@ def terminate_sequences(
 ) -> tuple[int, ...]:
     """Move the lead to `replied` in every active queue and return those campaigns.
 
-    Each campaign is its own transition and therefore its own transaction, so a
-    lead enrolled in two campaigns has both stopped, and a failure in one does
-    not roll back the other. `mark_replied` cancels the open job as part of that
-    same transaction, which is what stops a follow-up already sitting in the
-    queue from going out on top of the reply.
+    Each campaign is its own transition and therefore its own transaction, and
+    that is deliberate rather than an oversight. `mark_replied` cancels the open
+    job inside the same transaction as the sub-list write, so one campaign is
+    always all-or-nothing. Wrapping *several* campaigns in one transaction would
+    make a failure on the third undo the first two, and a lead whose stop was
+    rolled back is a lead whose follow-up goes out tonight. Independent stops
+    mean a failure costs one campaign rather than all of them.
+
+    For the same reason a failure is caught rather than propagated. Letting it
+    out would abandon every campaign after it in the list, so it is logged at
+    error level, reported to the caller, and the loop carries on.
     """
     stopped: list[int] = []
     for record in active_campaign_leads(conn, account_id, lead_id):
-        mark_replied(conn, record.campaign_id, lead_id, now=now, detail=detail)
+        try:
+            mark_replied(conn, record.campaign_id, lead_id, now=now, detail=detail)
+        except Exception:
+            logger.exception(
+                "Could not stop campaign %d for lead %d after a reply; the other "
+                "campaigns this lead is in are still being stopped",
+                record.campaign_id,
+                lead_id,
+            )
+            continue
         stopped.append(record.campaign_id)
         logger.info(
             "Lead %d replied, so campaign %d stopped sequencing it",
