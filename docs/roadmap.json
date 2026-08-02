@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updatedAt": "2026-08-02T04:28:19.553Z",
+  "updatedAt": "2026-08-02T09:54:35.065Z",
   "tasks": {
     "CORE-01": {
       "status": "done",
@@ -64,9 +64,11 @@
       "prMerged": true
     },
     "SCRAPE-01": {
-      "status": "pending",
+      "status": "done",
       "notes": "",
-      "issueNumber": 15
+      "issueNumber": 15,
+      "prNumber": 39,
+      "prMerged": true
     },
     "SCRAPE-02": {
       "status": "deferred",
