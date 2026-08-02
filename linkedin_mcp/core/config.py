@@ -157,6 +157,11 @@ UNMETERED_ACTIONS: frozenset[str] = (
             "login_secure",
             "browser_close",
             "post_comment_batch",
+            "harvest_enqueue",
+            "harvest_status",
+            "csv_import",
+            "lead_read",
+            "lead_export",
             CONNECTION_ACCEPTED_ACTION,
         }
     )
@@ -167,7 +172,16 @@ UNMETERED_ACTIONS: frozenset[str] = (
 Logging in cannot be rate limited without deadlocking recovery, closing the
 browser touches nobody, a batch wrapper is metered through the individual
 comments it posts, and an accepted invitation is something the other person did.
-The SEQ-05 draft actions in `DRAFT_ACTIONS` never leave the database.
+
+The five MCP-02 added reach LinkedIn not at all. Its harvest tools write a
+`jobs` row and return, `harvest_status` and the CRM reads read the local
+database, and a CSV import reads a local file. Metering any of them would spend
+a LinkedIn budget on work LinkedIn never sees, and metering the enqueue would
+charge one harvest twice: once when it was queued and again when the runner
+walked the pages under `profile_search` or `post_read`.
+
+The SEQ-05 draft actions in `DRAFT_ACTIONS` never leave the database either, and
+they are named as their own set because that reason is the stronger one.
 
 The metered universe is closed by exclusion, so anything left out of this set
 spends the account's daily and hourly LinkedIn budget from its first logged row.

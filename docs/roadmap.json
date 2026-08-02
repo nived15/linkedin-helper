@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updatedAt": "2026-08-02T11:40:09.528Z",
+  "updatedAt": "2026-08-02T16:07:41.914Z",
   "tasks": {
     "CORE-01": {
       "status": "done",
@@ -105,14 +105,18 @@
       "prMerged": true
     },
     "SEQ-03": {
-      "status": "pending",
+      "status": "done",
       "notes": "Directly satisfies VAL-02.",
-      "issueNumber": 21
+      "issueNumber": 21,
+      "prNumber": 46,
+      "prMerged": true
     },
     "SEQ-04": {
-      "status": "pending",
+      "status": "done",
       "notes": "",
-      "issueNumber": 22
+      "issueNumber": 22,
+      "prNumber": 47,
+      "prMerged": true
     },
     "SEQ-05": {
       "status": "pending",
@@ -125,9 +129,11 @@
       "issueNumber": 24
     },
     "MCP-02": {
-      "status": "pending",
+      "status": "done",
       "notes": "harvest_sales_nav intentionally omitted, see SCRAPE-02.",
-      "issueNumber": 25
+      "issueNumber": 25,
+      "prNumber": 45,
+      "prMerged": true
     },
     "MCP-03": {
       "status": "pending",

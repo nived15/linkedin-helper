@@ -164,7 +164,8 @@ mcp-linkedin-server/
 │   ├── core/                    # Config, database, migrations
 │   ├── leads/                   # Lead store, dedupe, blacklist, cache windows
 │   ├── safety/                  # The gate that answers before any action runs
-│   └── scrape/                  # Search result extraction (people, posts, groups)
+│   ├── scrape/                  # Search result extraction (people, posts, groups)
+│   └── tools/                   # MCP tool surface: harvest queueing and CRM reads
 │
 └── .github/
     ├── copilot-instructions.md  # Always-on context for all Copilot agents
@@ -196,6 +197,36 @@ mcp-linkedin-server/
 | `comment_on_approved_posts` | Post comments on a batch of approved posts |
 | `send_connection_request` | Send a connection request with optional personalised note |
 | `close_browser` | Close the persistent browser session |
+
+### Lead extraction and CRM tools
+
+These eleven live in `linkedin_mcp/tools/`. The harvest tools open no browser:
+each one validates its arguments, writes a row to the `jobs` queue and returns a
+job id, so harvesting a thousand profiles answers immediately instead of holding
+the MCP connection open for hours. The background runner does the scraping. The
+CRM tools read the local database only.
+
+| Tool | Description |
+| --- | --- |
+| `harvest_people_search` | Queue a People search harvest with the full filter set |
+| `harvest_post_engagers` | Queue a harvest of a post's likers and commenters |
+| `harvest_group_members` | Queue a harvest of a group's member list |
+| `harvest_event_attendees` | Queue a harvest of an event's attendee list |
+| `harvest_company_employees` | Queue a harvest of a company's people tab |
+| `harvest_connections` | Queue a harvest of your own connection list |
+| `harvest_import_csv` | Queue an import of a CSV of people, no LinkedIn request at all |
+| `harvest_status` | Report progress for a queued job, a running harvest, or the recent ones |
+| `lead_search` | Search stored leads by text and tags |
+| `lead_get` | Read one lead with its tags, custom fields and blacklist state |
+| `lead_export_csv` | Export leads to a CSV `harvest_import_csv` can read straight back |
+
+Results flow through the dedupe layer in `linkedin_mcp/leads/dedupe.py`, so
+running the same harvest twice resolves onto the same leads rather than creating
+a second copy of everybody. Exporting and re-importing is safe for the same
+reason.
+
+There is no `harvest_sales_nav`, deliberately. Sales Navigator extraction needs
+a paid subscription and is descoped, so no tool pretends to offer it.
 
 ### Pacing and navigation
 
