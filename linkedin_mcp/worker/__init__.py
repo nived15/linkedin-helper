@@ -6,6 +6,8 @@ without waiting for a real clock.
 
 - :mod:`~linkedin_mcp.worker.selection` decides what is due, including the
   campaign-less jobs `sequences.due_jobs` cannot see.
+- :mod:`~linkedin_mcp.worker.control` is the worker-level pause both lanes obey,
+  which is a different thing from `campaign_pause` stopping one campaign.
 - :mod:`~linkedin_mcp.worker.heartbeat` is how `worker_status` can say "stalled"
   and mean it.
 - :mod:`~linkedin_mcp.worker.actions` holds the seams: executors, the browser and
@@ -29,12 +31,20 @@ from linkedin_mcp.worker.actions import (
     no_browser,
     no_draft_parker,
 )
+from linkedin_mcp.worker.control import (
+    PauseState,
+    is_worker_paused,
+    pause_worker,
+    resume_worker,
+    worker_pause_state,
+)
 from linkedin_mcp.worker.heartbeat import (
     DEFAULT_STALLED_AFTER_SECONDS,
     LIVE_STATUSES,
     STATUS_CLOSED,
     STATUS_ERROR,
     STATUS_IDLE,
+    STATUS_PAUSED,
     STATUS_RUNNING,
     STATUS_SELECTING,
     STATUS_STARTING,
@@ -42,6 +52,7 @@ from linkedin_mcp.worker.heartbeat import (
     STATUS_SWEEPING,
     STATUSES,
     WorkerHeartbeat,
+    active_campaign_count,
     clear_heartbeat,
     list_heartbeats,
     read_heartbeat,
@@ -87,6 +98,7 @@ __all__ = [
     "STATUS_CLOSED",
     "STATUS_ERROR",
     "STATUS_IDLE",
+    "STATUS_PAUSED",
     "STATUS_RUNNING",
     "STATUS_SELECTING",
     "STATUS_STARTING",
@@ -103,11 +115,13 @@ __all__ = [
     "DraftRequest",
     "Executor",
     "JobReport",
+    "PauseState",
     "Selection",
     "TickReport",
     "Worker",
     "WorkerConfig",
     "WorkerHeartbeat",
+    "active_campaign_count",
     "ad_hoc_due_jobs",
     "build_worker",
     "bunch_jobs",
@@ -116,16 +130,20 @@ __all__ = [
     "is_ad_hoc",
     "is_campaign_work",
     "is_unroutable",
+    "is_worker_paused",
     "job_step",
     "list_heartbeats",
     "no_browser",
     "no_draft_parker",
+    "pause_worker",
     "read_heartbeat",
     "reclaim_stranded_ad_hoc",
+    "resume_worker",
     "seconds_since",
     "select_due_jobs",
     "sort_key",
     "unroutable_open_jobs",
+    "worker_pause_state",
     "worker_status",
     "write_heartbeat",
 ]

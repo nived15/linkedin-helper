@@ -163,6 +163,7 @@ mcp-linkedin-server/
 │   ├── browser/                 # Humanised pacing, navigation, selector registry
 │   ├── core/                    # Config, database, migrations
 │   ├── leads/                   # Lead store, dedupe, blacklist, cache windows
+│   ├── prompts/                 # The six guided linkedin:// MCP prompts
 │   ├── resources/               # The twelve read-only linkedin:// MCP resources
 │   ├── safety/                  # The gate that answers before any action runs
 │   ├── scrape/                  # Search result extraction (people, posts, groups)
@@ -228,6 +229,25 @@ reason.
 
 There is no `harvest_sales_nav`, deliberately. Sales Navigator extraction needs
 a paid subscription and is descoped, so no tool pretends to offer it.
+
+### Worker control
+
+Two tools in `linkedin_mcp/tools/worker.py`. They write one `worker_control` row
+and return; nothing is cancelled and no browser is opened.
+
+| Tool | Description |
+| --- | --- |
+| `worker_pause` | Stop both job lanes for this account, with a reason |
+| `worker_resume` | Let both lanes select work again, from where the queue stopped |
+
+`campaign_pause` is a different thing and stops one campaign. It cannot stop the
+worker, and the reason is structural: the campaign job lane inner-joins
+`campaigns` on the runnable statuses, while the ad-hoc lane that runs harvests
+and one-off actions selects on `campaign_id IS NULL` and never reads a campaign
+row. Pausing every campaign therefore leaves ad-hoc work going out.
+`worker_pause` is checked in `select_due_jobs` before either lane is queried, so
+both stop or neither does. Confirm it from `linkedin://worker/status`, where
+`paused` reads true and `campaigns_running` reads false.
 
 ### Pacing and navigation
 
@@ -368,7 +388,7 @@ client can watch a campaign without being handed a button that changes it.
 | `linkedin://leads/{id}` | One lead: fields, tags, campaign memberships, message history |
 | `linkedin://drafts/pending` | Drafts waiting on a human, plus depths for every other status |
 | `linkedin://inbox/unread` | Leads whose newest stored message is inbound |
-| `linkedin://worker/status` | Heartbeats, queue depths, and which workers have stalled |
+| `linkedin://worker/status` | Heartbeats, queue depths, the pause flag, and which workers have stalled |
 | `linkedin://stats/daily` | What this account did since midnight UTC |
 | `linkedin://analytics/weekly` | The last seven days, by day, action and campaign |
 | `linkedin://safety/today` | Remaining headroom per action type, and the binding ceiling |
@@ -403,6 +423,45 @@ test that no resource takes a LinkedIn action. The exemption exists because
 `actions_log` is the rate limiter's ledger; auditing a read would spend budget
 nobody used, and `linkedin://safety/today` would report headroom its own readers
 had consumed.
+
+**`campaigns_running` means what it says.** All three have to hold: a worker is
+live, no worker-level pause is in force, and at least one campaign is in a
+runnable status. It used to be "a worker is live" alone, so it read true on a
+database with no campaigns at all, and a client that paused everything and read
+the resource to confirm was told campaigns were running.
+
+---
+
+## MCP Prompts Reference
+
+Six guided workflows, registered in `linkedin_mcp/prompts/`. These are the same
+flows the `.github/` agents and skills describe, expressed in the protocol, so a
+client that has never heard of Copilot gets the walkthrough too.
+
+| Prompt | Arguments | What it walks |
+| --- | --- | --- |
+| `new_campaign` | `audience` (required), `goal`, `daily_invite_cap` | Audience, sequence, templates, limits, then `campaign_approve` |
+| `review_drafts` | `kind`, `campaign_id` | The generation queue, then the human approval queue |
+| `triage_replies` | `limit` | Sorting the unread inbox into four buckets, sending none of them |
+| `weekly_report` | `week_of` | Volume, outcome, funnel, health and the one change to make |
+| `safety_check` | none | Headroom, account state, worker health, and `worker_pause` if not |
+| `harvest_audience` | `source` (required), `target` | Picking a source, queueing it, checking what landed |
+
+Every prompt carries Nived's writing rules, and the rules are generated from
+`linkedin_mcp/templating/style.py` rather than restated, so a banned opener added
+to the checker changes what every prompt says on the next render. The prompt text
+is asserted in `tests/test_prompts.py` to pass the same `style_violations` check
+that rejects a template, because a prompt that preaches "no em dashes" while
+containing one is exactly the kind of thing that survives review for months.
+
+Prompts open no browser and write no `actions_log` row either, for the same
+reason resources do not and one more: rendering a prompt is not even a read of
+this account's state. `tests/test_actions.py` walks every `@mcp.prompt` for
+Playwright reachability alongside every tool and resource, and
+`tests/test_audit_log.py` pins the exemption.
+
+The `.github/` agents, skills and slash commands are all still there. This change
+is additive, so a Copilot session keeps working exactly as it did.
 
 ---
 

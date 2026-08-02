@@ -43,12 +43,15 @@ from datetime import datetime, timezone
 from typing import Any
 
 from linkedin_mcp.sequences import JobState, now_timestamp, transaction
+from linkedin_mcp.sequences.campaigns import RUNNABLE_STATUSES
+from linkedin_mcp.worker.control import worker_pause_state
 
 __all__ = [
     "DEFAULT_STALLED_AFTER_SECONDS",
     "LIVE_STATUSES",
     "STATUSES",
     "WorkerHeartbeat",
+    "active_campaign_count",
     "clear_heartbeat",
     "list_heartbeats",
     "read_heartbeat",
@@ -63,6 +66,7 @@ STATUS_SELECTING = "selecting"
 STATUS_RUNNING = "running"
 STATUS_IDLE = "idle"
 STATUS_CLOSED = "outside_working_hours"
+STATUS_PAUSED = "paused"
 STATUS_ERROR = "error"
 STATUS_STOPPED = "stopped"
 
@@ -73,6 +77,7 @@ STATUSES: tuple[str, ...] = (
     STATUS_RUNNING,
     STATUS_IDLE,
     STATUS_CLOSED,
+    STATUS_PAUSED,
     STATUS_ERROR,
     STATUS_STOPPED,
 )
@@ -87,6 +92,7 @@ LIVE_STATUSES: frozenset[str] = frozenset(
         STATUS_RUNNING,
         STATUS_IDLE,
         STATUS_CLOSED,
+        STATUS_PAUSED,
         STATUS_ERROR,
     }
 )
@@ -95,6 +101,10 @@ LIVE_STATUSES: frozenset[str] = frozenset(
 `error` is here on purpose. A worker that logged an error and kept ticking is
 alive; one that logged an error and died is not, and only the age of the row can
 tell those two apart.
+
+MCP-05 (#28) adds `paused` for the same reason. A paused worker keeps ticking
+and keeps writing heartbeats, it just selects nothing, so a paused row that stops
+being refreshed still means the process died and must still read as stalled.
 """
 
 DEFAULT_STALLED_AFTER_SECONDS = 180
@@ -311,6 +321,29 @@ def _queue_depths(
     }
 
 
+def active_campaign_count(
+    conn: sqlite3.Connection,
+    account_id: int | None = None,
+) -> int:
+    """How many campaigns are in a status the queue will actually run.
+
+    `RUNNABLE_STATUSES` is exactly `{"active"}`, and it is imported rather than
+    spelled out here so this stays the same definition `due_jobs` selects on. A
+    campaign that is `draft`, `pending_approval`, `paused`, `completed` or
+    `archived` yields no work however healthy the worker is.
+    """
+    runnable = tuple(sorted(RUNNABLE_STATUSES))
+    sql = (
+        "SELECT COUNT(*) AS total FROM campaigns "
+        f"WHERE status IN ({', '.join('?' for _ in runnable)})"
+    )
+    params: list[Any] = list(runnable)
+    if account_id is not None:
+        sql += " AND account_id = ?"
+        params.append(account_id)
+    return int(conn.execute(sql, params).fetchone()["total"])
+
+
 def worker_status(
     conn: sqlite3.Connection,
     *,
@@ -320,10 +353,23 @@ def worker_status(
 ) -> dict[str, Any]:
     """Report whether anything is actually running, and say so plainly.
 
-    `campaigns_running` is the answer to the question people really ask, and it
-    is False whenever no worker is live, however many jobs are queued and however
-    many campaigns are `active`. `queue_is_moving` separates the two honest kinds
-    of quiet: nothing to do, versus plenty to do and nobody doing it.
+    `campaigns_running` is the answer to the question people really ask, and
+    MCP-05 (#28) had to repair it before it could be trusted in either
+    direction. It was `bool(live)`, which never looked at a campaign at all: on a
+    database with zero campaigns and one live worker it returned True, and with
+    every campaign paused it still returned True. The safe direction was
+    documented and the unsafe one was not, which is the worst way round for a
+    field a client reads to confirm it stopped something.
+
+    It now means what its name says. All three have to hold: a worker is live, no
+    worker-level pause is in force, and at least one campaign is in a runnable
+    status. Any one of them false and no campaign is running, because no campaign
+    step can execute.
+
+    `queue_is_moving` separates the two honest kinds of quiet: nothing to do,
+    versus plenty to do and nobody doing it. A pause is the second kind, so a
+    paused worker with due jobs reports False rather than pretending the queue
+    is merely empty.
     """
     moment = now_timestamp(now)
     workers = list_heartbeats(conn, account_id=account_id, now=moment)
@@ -332,6 +378,13 @@ def worker_status(
     live = [report for report in reports if report["health"] == HEALTH_RUNNING]
     stalled = [report for report in reports if report["stalled"]]
     depths = _queue_depths(conn, account_id, moment)
+    active_campaigns = active_campaign_count(conn, account_id)
+
+    # A pause is per account. Asked about every account at once there is no one
+    # pause to report, so the flag is False and `pause` is None: the per-account
+    # read is the one that can answer this.
+    pause = None if account_id is None else worker_pause_state(conn, account_id)
+    paused = bool(pause is not None and pause.paused)
 
     return {
         "as_of": moment,
@@ -343,7 +396,10 @@ def worker_status(
         "stopped_workers": sum(
             1 for report in reports if report["health"] == HEALTH_STOPPED
         ),
-        "campaigns_running": bool(live),
-        "queue_is_moving": bool(live) or depths["due_jobs"] == 0,
+        "paused": paused,
+        "pause": None if pause is None else pause.to_result(),
+        "active_campaigns": active_campaigns,
+        "campaigns_running": bool(live) and not paused and active_campaigns > 0,
+        "queue_is_moving": (bool(live) and not paused) or depths["due_jobs"] == 0,
         **depths,
     }

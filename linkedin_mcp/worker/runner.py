@@ -122,6 +122,7 @@ from linkedin_mcp.worker.heartbeat import (
     STATUS_CLOSED,
     STATUS_ERROR,
     STATUS_IDLE,
+    STATUS_PAUSED,
     STATUS_RUNNING,
     STATUS_SELECTING,
     STATUS_STARTING,
@@ -200,6 +201,12 @@ class TickReport:
     reclaimed_ad_hoc: tuple[int, ...] = ()
     unroutable: tuple[int, ...] = ()
     deferred_metered: tuple[int, ...] = ()
+    paused: bool = False
+    """MCP-05 (#28): True when the worker pause stopped this tick selecting work.
+
+    A tick that ran nothing because it was paused and a tick that ran nothing
+    because nothing was due are both `idle`, and only this tells them apart.
+    """
 
     @property
     def executed(self) -> int:
@@ -418,7 +425,7 @@ class Worker:
         )
 
         reports = await self._run_selection(selection, moment, pinned=pinned)
-        self._heartbeat(STATUS_IDLE, now=moment)
+        self._heartbeat(STATUS_PAUSED if selection.paused else STATUS_IDLE, now=moment)
 
         return TickReport(
             at=str(moment),
@@ -430,6 +437,7 @@ class Worker:
             reclaimed_ad_hoc=reclaimed,
             unroutable=tuple(job.id for job in selection.unroutable),
             deferred_metered=tuple(job.id for job in selection.skipped_metered),
+            paused=selection.paused,
         )
 
     async def _run_selection(

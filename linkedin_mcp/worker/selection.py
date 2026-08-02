@@ -37,6 +37,17 @@ the runner merges them:
     can be driven, so executing it would be guessing. These are counted and
     reported by `worker_status` rather than executed or silently dropped.
 
+The worker pause is above both lanes
+------------------------------------
+MCP-05 (#28). `campaign_pause` stops one campaign, and it works because
+`due_jobs` inner-joins `campaigns` on `RUNNABLE_STATUSES`. The ad-hoc lane keys
+on `campaign_id IS NULL` and never reads a campaign row, so pausing every
+campaign left it running: measured on `2a34682`, an ad-hoc `profile_view` was
+still selected with the only campaign paused. So `select_due_jobs` reads
+:func:`linkedin_mcp.worker.control.is_worker_paused` before either lane is
+queried, and returns an empty selection flagged `paused` when it is set. Both
+lanes stop or neither does.
+
 Bottom-up priority
 ------------------
 Leads deepest in their sequence go first. A lead on step four is a conversation
@@ -84,6 +95,7 @@ from linkedin_mcp.sequences import (
     transaction,
 )
 from linkedin_mcp.sequences.jobs import job_row
+from linkedin_mcp.worker.control import is_worker_paused
 
 __all__ = [
     "AD_HOC_ORD",
@@ -353,6 +365,13 @@ class Selection:
     ad_hoc: tuple[Bunch, ...] = ()
     unroutable: tuple[Job, ...] = ()
     skipped_metered: tuple[Job, ...] = ()
+    paused: bool = False
+    """MCP-05 (#28): True when the worker pause stopped both lanes.
+
+    An empty selection has two causes that look identical from the outside:
+    nothing is due, or everything is due and the worker is paused. A caller that
+    cannot tell them apart cannot report either honestly, so the flag says which.
+    """
 
     @property
     def bunches(self) -> tuple[Bunch, ...]:
@@ -387,8 +406,22 @@ def select_due_jobs(
     `runnable` narrows both lanes to a set of action types, which is how the
     runner drops metered work outside working hours while still letting local
     steps such as filters proceed.
+
+    MCP-05 (#28): the worker pause is checked first and stops both lanes. It has
+    to live here rather than in either lane's query. `due_jobs` already refuses
+    work from a paused campaign, but `ad_hoc_due_jobs` keys on
+    `campaign_id IS NULL` and consults no campaign at all, so before this the
+    ad-hoc lane had no off switch and pausing every campaign still left one-off
+    invitations going out. Returning early also means a paused worker reads no
+    rows rather than reading them and discarding them.
     """
     moment = now_timestamp(now)
+    if is_worker_paused(conn, account_id):
+        # `unroutable` is still reported. It is a fault to be fixed rather than
+        # work to be run, and hiding it while paused would mean a pause made a
+        # problem disappear from `worker_status`.
+        return Selection(paused=True, unroutable=tuple(unroutable_open_jobs(conn, account_id)))
+
     allowed = None if runnable is None else set(runnable)
     skipped: list[Job] = []
 

@@ -395,7 +395,11 @@ def test_migration_0003_quarantines_duplicate_open_jobs_it_finds(tmp_path):
             )
         conn.commit()
 
-        assert migrate(conn) == ["0003_sequence_jobs"]
+        # Scoped to the migration this test is about. Asserting the whole list
+        # would fail for any later issue that legitimately adds one, which
+        # MCP-05 (#28) did.
+        applied_now = migrate(conn)
+        assert "0003_sequence_jobs" in applied_now, applied_now
 
         states = [
             row["state"]

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import pytest
 
-from linkedin_mcp.sequences import StepSpec
+from linkedin_mcp.sequences import StepSpec, set_campaign_status
 from linkedin_mcp.worker import (
     DEFAULT_STALLED_AFTER_SECONDS,
     LIVE_STATUSES,
@@ -20,7 +20,9 @@ from linkedin_mcp.worker import (
     STATUSES,
     clear_heartbeat,
     list_heartbeats,
+    pause_worker,
     read_heartbeat,
+    resume_worker,
     seconds_since,
     worker_status,
     write_heartbeat,
@@ -93,7 +95,13 @@ def test_a_worker_wedged_mid_job_is_reported_stalled_not_running(env):
     so it never writes another row. Because the heartbeat was written *before*
     the job rather than after it, its last row ages, and it names the job it
     wedged on.
+
+    MCP-05 (#28) added the campaign this test now creates. `campaigns_running`
+    used to be `bool(live)` and never looked at a campaign, so it read True on a
+    database with none. The assertion below is about the worker being live, and
+    that only says anything about campaigns while a campaign exists to run.
     """
+    env.campaign([StepSpec("connection_request")])
     beat(env, "wedged", STATUS_RUNNING, now=BASE_TIME, job_id=env.enqueue_ad_hoc())
 
     report = worker_status(
@@ -163,6 +171,7 @@ def test_a_cleanly_stopped_worker_never_reads_as_stalled(env):
 
 
 def test_one_live_worker_is_enough_for_the_queue_to_be_moving(env):
+    env.campaign([StepSpec("connection_request")])
     beat(env, "wedged", STATUS_RUNNING, now=BASE_TIME, job_id=env.enqueue_ad_hoc())
     beat(env, "alive", STATUS_IDLE, now=at(hours=2))
 
@@ -173,6 +182,7 @@ def test_one_live_worker_is_enough_for_the_queue_to_be_moving(env):
     assert report["live_workers"] == 1
     assert report["stalled_workers"] == 1
     assert report["campaigns_running"] is True
+    assert report["queue_is_moving"] is True
 
 
 def test_status_can_be_narrowed_to_one_account(env):
@@ -209,6 +219,100 @@ def test_an_unparseable_timestamp_is_not_reported_as_fresh(env):
     report = worker_status(env.conn, account_id=env.account_id, now=BASE_TIME)
     assert report["stalled_workers"] == 1
     assert report["campaigns_running"] is False
+
+
+# ----------------------------------------------------------------------
+# MCP-05 (#28): campaigns_running says what its name says
+# ----------------------------------------------------------------------
+
+
+def test_a_live_worker_with_no_campaigns_is_not_running_campaigns(env):
+    """The unsafe direction of `campaigns_running`, which used to be a lie.
+
+    The field was `bool(live)` and never read the `campaigns` table. On a
+    database with zero campaigns and one live worker it returned True, and the
+    docstring only ever documented the safe direction, that it is False when no
+    worker is live. A client asking "is anything going out" was told yes by a
+    field that had not looked.
+    """
+    beat(env, "alive", STATUS_IDLE, now=BASE_TIME)
+
+    report = worker_status(env.conn, account_id=env.account_id, now=BASE_TIME)
+
+    assert report["live_workers"] == 1
+    assert report["active_campaigns"] == 0
+    assert report["campaigns_running"] is False
+
+
+def test_every_campaign_paused_means_no_campaign_is_running(env):
+    """A live worker and every campaign paused is not a campaign running.
+
+    `due_jobs` inner-joins `campaigns` on `RUNNABLE_STATUSES`, so a paused
+    campaign yields no work whatever the worker is doing. Reporting it as
+    running was the same bug wearing different clothes.
+    """
+    campaign_id = env.campaign([StepSpec("connection_request")])
+    beat(env, "alive", STATUS_IDLE, now=BASE_TIME)
+
+    assert worker_status(env.conn, account_id=env.account_id, now=BASE_TIME)[
+        "campaigns_running"
+    ] is True
+
+    set_campaign_status(env.conn, campaign_id, "paused", now=BASE_TIME)
+
+    report = worker_status(env.conn, account_id=env.account_id, now=BASE_TIME)
+    assert report["active_campaigns"] == 0
+    assert report["campaigns_running"] is False
+
+
+def test_a_paused_worker_is_not_running_campaigns_and_the_queue_is_not_moving(env):
+    """The Phase 4 exit criterion, at the level of the status report.
+
+    A client that pauses the worker and reads the status to confirm has to be
+    told it stopped. Before this the answer was "campaigns_running: true",
+    because a live worker was the only input.
+    """
+    env.campaign([StepSpec("connection_request")])
+    env.enqueue_ad_hoc("profile_search")
+    beat(env, "alive", STATUS_IDLE, now=BASE_TIME)
+
+    before = worker_status(env.conn, account_id=env.account_id, now=BASE_TIME)
+    assert before["campaigns_running"] is True
+    assert before["queue_is_moving"] is True
+    assert before["paused"] is False
+    assert before["pause"]["paused"] is False
+
+    pause_worker(env.conn, env.account_id, reason="template rewrite", paused_by="nived")
+
+    after = worker_status(env.conn, account_id=env.account_id, now=BASE_TIME)
+    assert after["paused"] is True
+    assert after["pause"]["reason"] == "template rewrite"
+    assert after["pause"]["paused_by"] == "nived"
+    assert after["live_workers"] == 1
+    assert after["active_campaigns"] == 1
+    assert after["campaigns_running"] is False
+    assert after["due_jobs"] == 1
+    assert after["queue_is_moving"] is False
+
+    resume_worker(env.conn, env.account_id)
+
+    resumed = worker_status(env.conn, account_id=env.account_id, now=BASE_TIME)
+    assert resumed["paused"] is False
+    assert resumed["campaigns_running"] is True
+    assert resumed["pause"]["reason"] == "template rewrite", (
+        "why it was stopped survives the resume; nothing reads it to decide "
+        "anything and a blank row is a worse record"
+    )
+
+
+def test_a_pause_asked_about_every_account_at_once_has_no_single_answer(env):
+    """`worker_status` with no account cannot report one account's pause."""
+    pause_worker(env.conn, env.account_id)
+
+    everyone = worker_status(env.conn, now=BASE_TIME)
+
+    assert everyone["pause"] is None
+    assert everyone["paused"] is False
 
 
 def test_a_job_neither_lane_can_route_is_counted_rather_than_hidden(env):
