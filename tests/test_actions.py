@@ -173,12 +173,47 @@ def _is_mcp_resource(node: ast.AST) -> bool:
     return False
 
 
+# MCP-05 (#28) ---------------------------------------------------------------
+#
+# The fifth time this guard has been blind to a new surface, and the second time
+# in consecutive issues. It looked only for `@mcp.tool` until #27 taught it
+# `@mcp.resource`, and it knew nothing about `@mcp.prompt` until now: the string
+# "mcp.prompt" appeared nowhere in this file, so six prompts could have driven a
+# browser and every test here would have stayed green while they did.
+#
+# So the walk is written once over a set of decorator names rather than as one
+# predicate per surface. A seventh surface added by some later issue still needs
+# a line in `MCP_SURFACE_DECORATORS`, but it needs exactly that one line, and
+# `test_the_guard_is_written_once_for_every_surface` fails if the three
+# helpers and the set ever disagree about what exists.
+#
+# A prompt must never drive a page for the same reasons a resource must not, and
+# one more. It returns text. Nothing about assembling a string needs a browser,
+# so a prompt that opened one would be spending the account's LinkedIn budget on
+# a client listing its own menu.
+
+MCP_SURFACE_DECORATORS: frozenset[str] = frozenset({"tool", "resource", "prompt"})
+"""Every `mcp.<name>` decorator that puts a function on the wire.
+
+Named as data so the walk below covers a new surface by having one string added
+here rather than by having a fourth near-identical predicate written.
+"""
+
+
+def _is_mcp_prompt(node: ast.AST) -> bool:
+    for decorator in getattr(node, "decorator_list", []):
+        target = decorator.func if isinstance(decorator, ast.Call) else decorator
+        if isinstance(target, ast.Attribute) and target.attr == "prompt":
+            return True
+    return False
+
+
 def _surface_kind(node: ast.AST) -> str | None:
-    """`"tool"`, `"resource"` or `None` for anything else."""
-    if _is_mcp_tool(node):
-        return "tool"
-    if _is_mcp_resource(node):
-        return "resource"
+    """`"tool"`, `"resource"`, `"prompt"` or `None` for anything else."""
+    for decorator in getattr(node, "decorator_list", []):
+        target = decorator.func if isinstance(decorator, ast.Call) else decorator
+        if isinstance(target, ast.Attribute) and target.attr in MCP_SURFACE_DECORATORS:
+            return target.attr
     return None
 
 
@@ -244,11 +279,12 @@ def _direct_evidence(node: ast.AST, browser_names: set[str]) -> list[str]:
 def playwright_reaching_surface(
     source: str, label: str = "<module>"
 ) -> dict[str, list[str]]:
-    """Return every `@mcp.tool()` or `@mcp.resource()` that can reach a page.
+    """Return every MCP-registered function that can reach a page.
 
-    Follows calls into functions defined in the same module, because the way a
-    tool would smuggle Playwright back in is through a helper rather than in the
-    tool body itself. That is exactly what `login_linkedin` does today via
+    Tools, resources and, since #28, prompts. Follows calls into functions
+    defined in the same module, because the way one of these would smuggle
+    Playwright back in is through a helper rather than in the decorated body
+    itself. That is exactly what `login_linkedin` does today via
     `fill_selector_fallback`, and this finds it.
     """
     tree = ast.parse(source, filename=label)
@@ -301,14 +337,15 @@ name that says so is `playwright_reaching_surface`.
 async def test_no_mcp_tool_in_the_server_can_drive_playwright():
     """The DoD line, checked rather than asserted.
 
-    Every `@mcp.tool()` and, since #27, every `@mcp.resource()` in the
-    repository, in every module that registers one, with the session lifecycle
-    exemption named explicitly so a reviewer can see what is exempt and argue
-    with it.
+    Every `@mcp.tool()`, every `@mcp.resource()` since #27 and every
+    `@mcp.prompt()` since #28, in the repository, in every module that
+    registers one, with the session lifecycle exemption named explicitly so a
+    reviewer can see what is exempt and argue with it.
 
     The exemption is deliberately spent on tools only. A resource is a read and
-    no read needs a browser to create a session, so a resource that turned up in
-    the allowlist by sharing a name with an exempt tool would be a bug.
+    a prompt is a string, and neither needs a browser to create a session, so
+    one of those turning up in the allowlist by sharing a name with an exempt
+    tool would be a bug.
     """
     offenders: dict[str, list[str]] = {}
     for path in repo_modules():
@@ -495,6 +532,175 @@ async def test_the_resource_guard_is_non_vacuous_against_the_real_module():
     caught = playwright_reaching_surface(mutated, label)
     assert "scraped_campaigns" in caught, caught
     assert path.read_text(encoding="utf-8") == source
+
+
+# MCP-05 (#28) ---------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_the_guard_finds_the_prompts_it_claims_to_be_guarding():
+    """The same non-vacuity check, for the prompt half.
+
+    The count is taken from `linkedin_browser_mcp.mcp`, the object the process
+    actually serves, and compared against what the source walk found. PR #51 is
+    why: fifteen tools were fully tested against a FastMCP instance the tests
+    built themselves and stayed green for weeks while the shipped server never
+    registered them.
+    """
+    found: set[str] = set()
+    for path in repo_modules():
+        found.update(
+            name
+            for name, kind in mcp_surface_in(
+                path.read_text(encoding="utf-8"), str(path)
+            ).items()
+            if kind == "prompt"
+        )
+
+    assert len(found) >= 6, sorted(found)
+
+    served = {prompt.name for prompt in await linkedin_browser_mcp.mcp.list_prompts()}
+    assert served == {
+        "harvest_audience",
+        "new_campaign",
+        "review_drafts",
+        "safety_check",
+        "triage_replies",
+        "weekly_report",
+    }
+    assert served <= found
+
+
+@pytest.mark.asyncio
+async def test_the_guard_catches_a_prompt_that_drives_a_page():
+    """Three ways a prompt could reach a page, all caught.
+
+    Directly, through one helper, and through two. The two-hop case is the one
+    worth having: a prompt that called a formatting helper that happened to call
+    a scraping helper is how this would arrive in real life, and it is invisible
+    to anything that only reads the decorated function body.
+    """
+    direct = '''
+@mcp.prompt(name="new_campaign")
+def new_campaign(audience: str) -> str:
+    page = await session.new_page("https://www.linkedin.com/feed/")
+    return "build a campaign"
+'''
+    assert playwright_reaching_surface(direct, "direct.py") == {
+        "new_campaign": ["page method .new_page()"]
+    }
+
+    one_hop = '''
+from linkedin_mcp.executors.support import wait_for_selector_fallback
+
+def sample(page):
+    return wait_for_selector_fallback(page, "lead_card")
+
+@mcp.prompt(name="new_campaign")
+def new_campaign(audience: str) -> str:
+    return sample(page)
+'''
+    assert "new_campaign" in playwright_reaching_surface(one_hop, "one_hop.py")
+
+    two_hops = '''
+from linkedin_mcp.browser import BrowserSession
+
+def open_page():
+    return BrowserSession()
+
+def gather():
+    return open_page()
+
+@mcp.prompt(name="new_campaign")
+def new_campaign(audience: str) -> str:
+    return gather()
+'''
+    evidence = playwright_reaching_surface(two_hops, "two_hops.py")
+    assert "new_campaign" in evidence
+    assert "via gather()" in evidence["new_campaign"][0]
+
+    innocent = '''
+@mcp.prompt(name="new_campaign")
+def new_campaign(audience: str) -> str:
+    return voice_rules() + audience
+'''
+    assert playwright_reaching_surface(innocent, "innocent.py") == {}
+
+
+@pytest.mark.asyncio
+async def test_the_prompt_guard_is_non_vacuous_against_a_module_it_never_saw():
+    """Mutate a module written after the guard and watch the guard bite.
+
+    Deliberately pointed at `linkedin_mcp/prompts/server.py` rather than at a
+    file this guard was written against. A walk that only caught what its author
+    remembered to feed it is the failure this whole test file exists to prevent,
+    and the way to find out is to run it against a module nobody had in mind.
+
+    The order here matters. The mutation is asserted to have landed and the
+    mutated source is asserted to still parse *before* the result is read. An
+    injection that fails to parse fails the walk for the wrong reason and proves
+    nothing at all, which would leave this test looking exactly as green as a
+    working one.
+    """
+    path = REPO_ROOT / "linkedin_mcp" / "prompts" / "server.py"
+    source = path.read_text(encoding="utf-8")
+    label = str(path.relative_to(REPO_ROOT))
+
+    # The module is clean today, and the walk can see its prompts at all.
+    assert playwright_reaching_surface(source, label) == {}
+    assert set(mcp_surface_in(source, label).values()) == {"prompt"}
+
+    mutation = (
+        "\n\n"
+        "@mcp.prompt(name='scraped_campaign')\n"
+        "async def scraped_campaign(audience: str) -> str:\n"
+        "    page = await session.new_page('https://www.linkedin.com/feed/')\n"
+        "    return await page.query_selector_all('.campaign')\n"
+    )
+    mutated = source + mutation
+
+    # Assert the injection landed, parses, and created the condition, in that
+    # order, before believing anything the walk says about it.
+    assert "scraped_campaign" in mutated
+    ast.parse(mutated, filename=label)
+    assert mcp_surface_in(mutated, label).get("scraped_campaign") == "prompt"
+
+    caught = playwright_reaching_surface(mutated, label)
+    assert "scraped_campaign" in caught, caught
+    assert "page method .new_page()" in caught["scraped_campaign"]
+    assert path.read_text(encoding="utf-8") == source
+
+
+def test_the_guard_is_written_once_for_every_surface():
+    """The three predicates and the decorator set cannot disagree.
+
+    `_surface_kind` reads `MCP_SURFACE_DECORATORS`, and the per-surface helpers
+    are kept for readers grepping for them. If someone adds a fourth decorator
+    to the set without a helper, or writes a helper for something the set does
+    not know about, this says so rather than leaving one of them dead.
+    """
+    assert MCP_SURFACE_DECORATORS == {"tool", "resource", "prompt"}
+
+    samples = {
+        "tool": "@mcp.tool()\nasync def a():\n    return {}\n",
+        "resource": "@mcp.resource('linkedin://x')\nasync def b():\n    return ''\n",
+        "prompt": "@mcp.prompt(name='c')\ndef c() -> str:\n    return ''\n",
+    }
+    predicates = {
+        "tool": _is_mcp_tool,
+        "resource": _is_mcp_resource,
+        "prompt": _is_mcp_prompt,
+    }
+    assert set(samples) == MCP_SURFACE_DECORATORS
+    assert set(predicates) == MCP_SURFACE_DECORATORS
+
+    for kind, snippet in samples.items():
+        assert list(mcp_surface_in(snippet).values()) == [kind]
+        node = ast.parse(snippet).body[0]
+        for name, predicate in predicates.items():
+            assert predicate(node) is (name == kind), (kind, name)
+
+    assert mcp_surface_in("def plain():\n    return 1\n") == {}
 
 
 @pytest.mark.asyncio

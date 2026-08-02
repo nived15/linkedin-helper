@@ -258,6 +258,12 @@ def register_linkedin_resources(mcp: FastMCP) -> ResourceUpdateNotifier:
         A worker that wedged hours ago still has `status` reading `running`,
         because that is what it wrote before it wedged. Its `health` reads
         `stalled` and `campaigns_running` is False, which is the honest answer.
+
+        MCP-05 (#28) added `paused` and `pause`, and made `campaigns_running`
+        mean what it says. All three now have to hold: a worker is live, no
+        worker-level pause is in force, and at least one campaign is runnable.
+        Before that it was `bool(live)` alone, so a client that stopped the
+        worker and read this to confirm was told campaigns were still running.
         """
         conn = tool_connection()
         account_id = tool_account_id()

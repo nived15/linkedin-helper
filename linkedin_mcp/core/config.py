@@ -306,3 +306,41 @@ __all__ += [
     "ADHOC_QUEUE_ACTIONS",
     "ADHOC_STATUS_ACTION",
 ]
+
+
+# MCP-05 (#28) ---------------------------------------------------------------
+#
+# Appended as one contiguous block for the same file-ownership reason MCP-03
+# gave above. Nothing before this line is touched.
+#
+# The worker-level pause. `campaign_pause` stops one campaign and the ad-hoc
+# lane in `linkedin_mcp.worker.selection` never consults a campaign at all, so
+# before this there was no way to stop the worker as a whole. These two tools
+# write one `worker_control` row and return; LinkedIn is not contacted, so
+# metering them would spend an outreach budget on an operator flipping a switch.
+#
+# Pausing must also never be refused. A caller who wants to stop the worker
+# because something is going wrong is exactly the caller whose budget is most
+# likely to be spent, and "you have run out of actions, so you may not stop"
+# would be the worst possible time to say no. That is the same reasoning
+# `ADHOC_CANCEL_ACTION` records for cancelling a queued action.
+
+WORKER_PAUSE_ACTION = "worker_pause"
+"""Audit action type for stopping both job lanes. Local only, never metered."""
+
+WORKER_RESUME_ACTION = "worker_resume"
+"""Audit action type for letting both job lanes select work again."""
+
+WORKER_CONTROL_ACTIONS: frozenset[str] = frozenset(
+    {WORKER_PAUSE_ACTION, WORKER_RESUME_ACTION}
+)
+"""MCP-05's worker control. Neither of these reaches LinkedIn."""
+
+UNMETERED_ACTIONS = UNMETERED_ACTIONS | WORKER_CONTROL_ACTIONS
+"""Extended rather than rewritten, exactly as MCP-03 did directly above."""
+
+__all__ += [
+    "WORKER_CONTROL_ACTIONS",
+    "WORKER_PAUSE_ACTION",
+    "WORKER_RESUME_ACTION",
+]

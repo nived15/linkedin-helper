@@ -117,11 +117,13 @@ from linkedin_mcp.worker.actions import (
     no_browser,
     no_draft_parker,
 )
+from linkedin_mcp.worker.control import is_worker_paused
 from linkedin_mcp.worker.heartbeat import (
     DEFAULT_STALLED_AFTER_SECONDS,
     STATUS_CLOSED,
     STATUS_ERROR,
     STATUS_IDLE,
+    STATUS_PAUSED,
     STATUS_RUNNING,
     STATUS_SELECTING,
     STATUS_STARTING,
@@ -200,6 +202,12 @@ class TickReport:
     reclaimed_ad_hoc: tuple[int, ...] = ()
     unroutable: tuple[int, ...] = ()
     deferred_metered: tuple[int, ...] = ()
+    paused: bool = False
+    """MCP-05 (#28): True when the worker pause stopped this tick selecting work.
+
+    A tick that ran nothing because it was paused and a tick that ran nothing
+    because nothing was due are both `idle`, and only this tells them apart.
+    """
 
     @property
     def executed(self) -> int:
@@ -417,8 +425,11 @@ class Worker:
             runnable=None if open_now else sorted(LOCAL_ACTIONS),
         )
 
-        reports = await self._run_selection(selection, moment, pinned=pinned)
-        self._heartbeat(STATUS_IDLE, now=moment)
+        reports, paused_mid_tick = await self._run_selection(
+            selection, moment, pinned=pinned
+        )
+        paused = selection.paused or paused_mid_tick
+        self._heartbeat(STATUS_PAUSED if paused else STATUS_IDLE, now=moment)
 
         return TickReport(
             at=str(moment),
@@ -430,6 +441,7 @@ class Worker:
             reclaimed_ad_hoc=reclaimed,
             unroutable=tuple(job.id for job in selection.unroutable),
             deferred_metered=tuple(job.id for job in selection.skipped_metered),
+            paused=paused,
         )
 
     async def _run_selection(
@@ -438,7 +450,19 @@ class Worker:
         moment: datetime,
         *,
         pinned: bool,
-    ) -> list[JobReport]:
+    ) -> tuple[list[JobReport], bool]:
+        """Run the selection, and report whether a mid-tick pause stopped it.
+
+        MCP-05 (#28): the pause is re-read before every job, not only once in
+        `select_due_jobs`. A tick selects up to fifteen jobs and then humanises
+        the gaps between them, so a `worker_pause` that landed after selection
+        would otherwise return while the rest of that tick kept sending. The
+        check sits beside the mid-tick working-hours check for the same reason
+        that one exists, and it costs one indexed primary-key read per job.
+
+        A job already leased and in flight still finishes. A flag cannot un-send
+        half an invitation, and `worker_pause` says so.
+        """
         if selection.unroutable:
             logger.warning(
                 "%d open jobs name a campaign but no lead, so no state machine "
@@ -452,7 +476,14 @@ class Worker:
         for bunch in selection.bunches:
             for job in bunch.jobs:
                 if self._stop.is_set():
-                    return reports
+                    return reports, False
+                if is_worker_paused(self.conn, self.account_id):
+                    logger.info(
+                        "stopping the tick at job %s: the worker was paused "
+                        "after this tick selected its work",
+                        job.id,
+                    )
+                    return reports, True
                 reaches_linkedin = job.action_type not in LOCAL_ACTIONS
                 if acted and reaches_linkedin and self.config.pace_between_actions:
                     # The only delay in this loop that is about looking human
@@ -470,13 +501,13 @@ class Worker:
                         "stopping the bunch at job %s: the account closed mid-tick",
                         job.id,
                     )
-                    return reports
+                    return reports, False
                 self._heartbeat(STATUS_RUNNING, now=at, current_job_id=job.id)
                 report = await self._run_job(job, bunch, at)
                 if report is not None:
                     reports.append(report)
                     acted = acted or reaches_linkedin
-        return reports
+        return reports, False
 
     async def _run_job(
         self,

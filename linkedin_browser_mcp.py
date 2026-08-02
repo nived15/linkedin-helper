@@ -561,6 +561,38 @@ re-reading and which URIs moved since it last looked.
 """
 
 
+# MCP-05 (#28) -----------------------------------------------------------------
+#
+# One contiguous block at the foot of the file, appended for the same reason
+# MCP-04 gave above. Registration order does not matter: both calls run at
+# import, before `mcp.run` is reached.
+#
+# Two things arrive here, and they are different kinds of thing.
+#
+# `register_worker_tools` adds `worker_pause` and `worker_resume`. They are the
+# Phase 4 exit criterion's "pause the worker", and they had to be written because
+# no tool did it. `campaign_pause` stops one campaign, and the ad-hoc job lane
+# keys on `campaign_id IS NULL` and never consults a campaign at all, so pausing
+# every campaign left one-off invitations and harvests going out. Both carry
+# `@audit_linkedin_action` and neither drives a browser: they write one
+# `worker_control` row and the worker's own selection reads it.
+#
+# `register_linkedin_prompts` adds the six guided workflows. A prompt returns
+# text. It opens no browser, spends no action budget and writes no `actions_log`
+# row, which is the same position #27 took for resources and is now pinned by
+# `tests/test_actions.py` and `tests/test_audit_log.py` for prompts too.
+#
+# Nothing under `.github/` is removed by this change. The five agents, five
+# skills and five slash commands keep working exactly as they did, so there is
+# no window where Nived cannot post or engage while clients move across.
+
+from linkedin_mcp.prompts import register_linkedin_prompts  # noqa: E402
+from linkedin_mcp.tools.worker import register_worker_tools  # noqa: E402
+
+register_worker_tools(mcp)
+register_linkedin_prompts(mcp)
+
+
 if __name__ == "__main__":
     try:
         logger.debug("Starting LinkedIn MCP Server with debug logging")

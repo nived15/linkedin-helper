@@ -382,12 +382,26 @@ def test_only_the_daemon_entry_point_reaches_playwright():
 
 
 def test_the_worker_package_owns_no_migration():
-    """`worker_heartbeat` already exists in 0001, so SEQ-04 adds no schema."""
-    migrations = sorted(
-        (REPO_ROOT / "linkedin_mcp" / "core" / "migrations").glob("*.sql")
-    )
-    assert [path.name for path in migrations] == [
-        "0001_init.sql",
-        "0002_lead_dedupe.sql",
-        "0003_sequence_jobs.sql",
+    """`worker_heartbeat` already exists in 0001, so SEQ-04 adds no schema.
+
+    Scoped to filenames SEQ-04 could have created rather than to the repository's
+    complete migration list. The global form of this assertion is a false
+    positive aimed at the wrong author: two sessions shipped it in wave 4 and it
+    failed for an unrelated branch that legitimately added one. MCP-05 (#28) is
+    that unrelated branch, and it added `0004_worker_pause.sql` for the
+    worker-level pause, which is nothing to do with SEQ-04's claim here.
+    """
+    names = [
+        path.name
+        for path in (REPO_ROOT / "linkedin_mcp" / "core" / "migrations").glob("*.sql")
     ]
+
+    assert "0001_init.sql" in names
+    assert [
+        name
+        for name in names
+        if any(word in name.lower() for word in ("heartbeat", "worker_run", "seq_04"))
+    ] == [], names
+
+    package = REPO_ROOT / "linkedin_mcp" / "worker"
+    assert list(package.rglob("*.sql")) == []

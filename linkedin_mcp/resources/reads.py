@@ -461,6 +461,12 @@ def worker_status_read(
     phase it was in when it wedged. That last part is the honest bit: `status`
     is what the worker said it was doing, `health` is whether anyone still
     believes it.
+
+    MCP-05 (#28): the payload also carries `paused`, `pause` and
+    `active_campaigns`, and `campaigns_running` is False whenever the worker is
+    paused or no campaign is runnable. This is the read a client uses to confirm
+    that `worker_pause` took effect, so it has to be right in both directions
+    rather than only in the safe one.
     """
     report = worker_status(conn, account_id=account_id, now=now)
     report["challenged_accounts"] = open_challenges(conn)

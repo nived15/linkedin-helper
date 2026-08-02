@@ -3,6 +3,7 @@ import asyncio
 import json
 import re
 import sqlite3
+from collections.abc import Iterable
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -201,6 +202,112 @@ def resource_modules() -> dict[str, dict[str, list[str]]]:
         if resources:
             modules[relative.as_posix()] = resources
     return modules
+
+
+# MCP-05 (#28) ---------------------------------------------------------------
+#
+# `mcp_tools_in` keys on "mcp.tool" and `mcp_resources_in` keys on
+# "mcp.resource", so the six `@mcp.prompt` functions added by #28 were invisible
+# to this file exactly as the resources were before #27. That is the fifth time a
+# guard in this repository has been green because it was not looking, and the
+# silence reads identically to a pass.
+#
+# The position, stated rather than inherited: prompts do NOT carry
+# `@audit_linkedin_action`, deliberately, and the argument is #27's for
+# resources with less doubt rather than more.
+#
+# `actions_log` is the ledger `linkedin_mcp.safety.limits` counts, not a diary.
+# `daily_budget` and `weekly_budget` derive `used` and `remaining` straight from
+# `count_actions_in_window`, so a row in that table is a claim that some of
+# today's LinkedIn budget was spent. Rendering a prompt spends none: these
+# functions build a string, open no browser, read no database and contact
+# nobody. Auditing them would mean a client that listed the prompt menu on
+# connect had eaten into the day's invitation allowance before doing anything,
+# and `safety_check` would report a number its own rendering had corrupted.
+#
+# There is a second reason that does not apply to resources. A prompt is not
+# even a read of this account's state. It is text describing a workflow, so an
+# `actions_log` row from one would be attributing a LinkedIn action to a
+# function that never looked at LinkedIn or at the database.
+#
+# What is checked below instead: that prompts exist and are found, that none of
+# them carries the decorator, and that none of them calls anything that spends a
+# LinkedIn action. The runtime half is in `tests/test_prompts.py`, which renders
+# all six through the shipped server and asserts `actions_log` is still empty.
+
+
+def mcp_prompts_in(source: str) -> dict[str, list[str]]:
+    """Return every `@mcp.prompt()` function in a module, with its decorators."""
+    tree = ast.parse(source)
+    return {
+        node.name: decorator_names(node)
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.AsyncFunctionDef, ast.FunctionDef))
+        and "mcp.prompt" in decorator_names(node)
+    }
+
+
+def prompt_modules() -> dict[str, dict[str, list[str]]]:
+    """Every shipped module that registers MCP prompts, keyed by path."""
+    modules: dict[str, dict[str, list[str]]] = {}
+    for path in scanned_files():
+        if path.suffix != ".py":
+            continue
+        relative = path.relative_to(REPO_ROOT)
+        if relative.parts and relative.parts[0] == "tests":
+            continue
+        prompts = mcp_prompts_in(path.read_text(encoding="utf-8"))
+        if prompts:
+            modules[relative.as_posix()] = prompts
+    return modules
+
+
+def spending_call(path: Path, names: Iterable[str]) -> dict[str, str]:
+    """Return the named functions in `path` that reach an action-spending call.
+
+    Follows helpers defined in the same module, for the same reason
+    `tests/test_actions.py` does: a function that called `_enqueue()` which
+    called `enqueue_action()` looks innocent from the decorated body.
+
+    Extracted from `test_no_mcp_resource_takes_a_linkedin_action` so the prompt
+    half of #28 reuses the walk instead of copying it. A second copy of a guard
+    is how the two halves drift until only one of them is right.
+    """
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    local = {
+        node.name: node
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.AsyncFunctionDef, ast.FunctionDef))
+    }
+
+    def spends(node: ast.AST, seen: set[str]) -> str | None:
+        for inner in ast.walk(node):
+            if not isinstance(inner, ast.Call):
+                continue
+            callee = inner.func
+            name = (
+                callee.id
+                if isinstance(callee, ast.Name)
+                else callee.attr
+                if isinstance(callee, ast.Attribute)
+                else None
+            )
+            if name is None:
+                continue
+            if name in ACTION_SPENDING_CALLS:
+                return name
+            if name in seen or name not in local:
+                continue
+            seen.add(name)
+            if (deeper := spends(local[name], seen)) is not None:
+                return f"{name}() -> {deeper}"
+        return None
+
+    found: dict[str, str] = {}
+    for name in names:
+        if name in local and (why := spends(local[name], {name})) is not None:
+            found[name] = why
+    return found
 
 
 def tool_modules() -> dict[str, dict[str, list[str]]]:
@@ -989,45 +1096,14 @@ def test_no_mcp_resource_takes_a_linkedin_action():
 
     The walk follows helpers defined in the same module, for the same reason
     `tests/test_actions.py` does. A resource that called `_enqueue()` which
-    called `enqueue_action()` would look innocent from the decorated body.
+    called `enqueue_action()` would look innocent from the decorated body. It
+    lives in `spending_call` so #28's prompt guard shares it rather than
+    carrying a second copy that can drift.
     """
     offenders: dict[str, str] = {}
-
-    for module in resource_modules():
-        path = REPO_ROOT / module
-        tree = ast.parse(path.read_text(encoding="utf-8"))
-        local = {
-            node.name: node
-            for node in ast.walk(tree)
-            if isinstance(node, (ast.AsyncFunctionDef, ast.FunctionDef))
-        }
-
-        def spends(node: ast.AST, seen: set[str]) -> str | None:
-            for inner in ast.walk(node):
-                if not isinstance(inner, ast.Call):
-                    continue
-                callee = inner.func
-                name = (
-                    callee.id
-                    if isinstance(callee, ast.Name)
-                    else callee.attr
-                    if isinstance(callee, ast.Attribute)
-                    else None
-                )
-                if name is None:
-                    continue
-                if name in ACTION_SPENDING_CALLS:
-                    return name
-                if name in seen or name not in local:
-                    continue
-                seen.add(name)
-                if (deeper := spends(local[name], seen)) is not None:
-                    return f"{name}() -> {deeper}"
-            return None
-
-        for name in mcp_resources_in(path.read_text(encoding="utf-8")):
-            if (why := spends(local[name], {name})) is not None:
-                offenders[f"{module}::{name}"] = why
+    for module, resources in resource_modules().items():
+        for name, why in spending_call(REPO_ROOT / module, resources).items():
+            offenders[f"{module}::{name}"] = why
 
     assert offenders == {}, (
         "these MCP resources take or queue a LinkedIn action; a resource is a "
@@ -1064,3 +1140,135 @@ def test_the_resource_exemption_guard_would_catch_an_acting_resource():
     plain_tool = "@mcp.tool()\nasync def a_tool():\n    return {}\n"
     assert mcp_resources_in(plain_tool) == {}
     assert mcp_tools_in(audited_resource) == {}
+
+
+# MCP-05 (#28) ---------------------------------------------------------------
+
+
+def test_the_instrumentation_guard_can_see_mcp_prompts_at_all():
+    """The guard knows prompts exist. It had no idea until #28.
+
+    `mcp_tools_in` matches on "mcp.tool" and `mcp_resources_in` on
+    "mcp.resource", so every `@mcp.prompt` slipped past both and this whole file
+    would have stayed green whatever those six functions did. The count is
+    asserted against the source so deleting the prompt package cannot quietly
+    turn the two tests below into no-ops.
+    """
+    modules = prompt_modules()
+
+    assert modules, "no module registers MCP prompts; the walk found nothing"
+    assert "linkedin_mcp/prompts/server.py" in modules
+    found = {name for prompts in modules.values() for name in prompts}
+    assert len(found) >= 6, sorted(found)
+    assert {
+        "harvest_audience",
+        "new_campaign",
+        "review_drafts",
+        "safety_check",
+        "triage_replies",
+        "weekly_report",
+    } <= found
+
+
+def test_mcp_prompts_are_deliberately_exempt_from_the_audit_decorator():
+    """Prompts carry no `@audit_linkedin_action`, and that is the intent.
+
+    The reasoning is in the block comment above `mcp_prompts_in`. The short
+    version: `actions_log` is the rate limiter's ledger rather than a diary, a
+    prompt is a string builder that spends no LinkedIn budget, and a client that
+    listed the prompt menu on connect would otherwise have consumed part of the
+    day's invitation allowance before doing anything at all.
+
+    Written as an assertion rather than left implicit so anyone who disagrees
+    has something concrete to delete, and so a prompt that quietly grew the
+    decorator has to argue with a failing test first.
+    """
+    audited = {
+        f"{module}::{name}"
+        for module, prompts in prompt_modules().items()
+        for name, decorators in prompts.items()
+        if "audit_linkedin_action" in decorators
+    }
+
+    assert audited == set(), (
+        "these MCP prompts are audited; rendering a prompt spends no LinkedIn "
+        "budget, so an actions_log row from one corrupts the budget arithmetic "
+        "that linkedin://safety/today reports:\n  " + "\n  ".join(sorted(audited))
+    )
+
+
+def test_no_mcp_prompt_takes_a_linkedin_action():
+    """The exemption is only safe while prompts stay text.
+
+    Same shape as the resource guard directly above, and the same walk, because
+    a prompt that queued a connection request through a helper would be both
+    unaudited and unnoticed. `spending_call` follows helpers defined in the same
+    module, so an innocent-looking decorated body is not enough to pass.
+    """
+    offenders: dict[str, str] = {}
+    for module, prompts in prompt_modules().items():
+        for name, why in spending_call(REPO_ROOT / module, prompts).items():
+            offenders[f"{module}::{name}"] = why
+
+    assert offenders == {}, (
+        "these MCP prompts take or queue a LinkedIn action; a prompt returns "
+        "text, and one that acts must be a tool with an audit decorator:\n  "
+        + "\n  ".join(f"{where}: {why}" for where, why in sorted(offenders.items()))
+    )
+
+
+def test_the_prompt_exemption_guard_would_catch_an_acting_prompt():
+    """The three tests above are not vacuous.
+
+    A prompt carrying the decorator is found, a nested one is found, and a
+    prompt that queues an action through a helper is found. The last is checked
+    against `spending_call`, the same function the real guard runs, using a real
+    file on disk rather than a string, because that is what the guard reads.
+    """
+    audited_prompt = (
+        "@mcp.prompt(name='new_campaign')\n"
+        "@audit_linkedin_action('profile_view')\n"
+        "def new_campaign():\n"
+        "    return ''\n"
+    )
+    found = mcp_prompts_in(audited_prompt)
+    assert list(found) == ["new_campaign"]
+    assert "audit_linkedin_action" in found["new_campaign"]
+
+    nested = (
+        "def register(mcp):\n"
+        "    @mcp.prompt(name='new_campaign')\n"
+        "    def nested_prompt():\n"
+        "        return ''\n"
+    )
+    assert list(mcp_prompts_in(nested)) == ["nested_prompt"]
+
+    plain_tool = "@mcp.tool()\nasync def a_tool():\n    return {}\n"
+    assert mcp_prompts_in(plain_tool) == {}
+    assert mcp_tools_in(audited_prompt) == {}
+    assert mcp_resources_in(audited_prompt) == {}
+
+
+def test_the_prompt_action_guard_would_catch_a_prompt_that_queues_work(tmp_path):
+    """`spending_call` bites on a prompt that acts through a helper."""
+    module = tmp_path / "acting_prompts.py"
+    module.write_text(
+        "def _queue(name):\n"
+        "    return enqueue_action(name, {})\n"
+        "\n"
+        "def register(mcp):\n"
+        "    @mcp.prompt(name='new_campaign')\n"
+        "    def new_campaign():\n"
+        "        return _queue('connection_request')\n"
+        "\n"
+        "    @mcp.prompt(name='safety_check')\n"
+        "    def safety_check():\n"
+        "        return 'read linkedin://safety/today'\n",
+        encoding="utf-8",
+    )
+
+    names = mcp_prompts_in(module.read_text(encoding="utf-8"))
+    assert sorted(names) == ["new_campaign", "safety_check"]
+
+    caught = spending_call(module, names)
+    assert caught == {"new_campaign": "_queue() -> enqueue_action"}
