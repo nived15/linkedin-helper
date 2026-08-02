@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updatedAt": "2026-08-02T11:33:14.185Z",
+  "updatedAt": "2026-08-02T11:38:33.393Z",
   "tasks": {
     "CORE-01": {
       "status": "done",
@@ -77,9 +77,11 @@
       "notes": "Descoped by decision: free LinkedIn sources only, no paid subscriptions. Deliberately has no GitHub issue for this reason. File one if the decision is ever reversed."
     },
     "SCRAPE-03": {
-      "status": "pending",
+      "status": "done",
       "notes": "",
-      "issueNumber": 16
+      "issueNumber": 16,
+      "prNumber": 42,
+      "prMerged": true
     },
     "SCRAPE-04": {
       "status": "done",
