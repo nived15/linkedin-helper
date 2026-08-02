@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updatedAt": "2026-08-02T11:40:09.528Z",
+  "updatedAt": "2026-08-02T16:07:04.014Z",
   "tasks": {
     "CORE-01": {
       "status": "done",
@@ -125,9 +125,11 @@
       "issueNumber": 24
     },
     "MCP-02": {
-      "status": "pending",
+      "status": "done",
       "notes": "harvest_sales_nav intentionally omitted, see SCRAPE-02.",
-      "issueNumber": 25
+      "issueNumber": 25,
+      "prNumber": 45,
+      "prMerged": true
     },
     "MCP-03": {
       "status": "pending",
