@@ -24,6 +24,7 @@ __all__ = [
     "CONNECTION_ACCEPTED_ACTION",
     "DEDUPE_WINDOW_DAYS",
     "DEFAULT_CEILING",
+    "DRAFT_ACTIONS",
     "GLOBAL_DAILY_CEILING",
     "GLOBAL_HOURLY_CEILING",
     "HARD_CEILINGS",
@@ -137,20 +138,39 @@ DEFAULT_CEILING = ActionCeiling(daily=50)
 METERED_ACTIONS: frozenset[str] = frozenset(HARD_CEILINGS)
 """Action types that consume the global daily and hourly budgets."""
 
-UNMETERED_ACTIONS: frozenset[str] = frozenset(
-    {
-        "login",
-        "login_secure",
-        "browser_close",
-        "post_comment_batch",
-        CONNECTION_ACCEPTED_ACTION,
-    }
+DRAFT_ACTIONS: frozenset[str] = frozenset(
+    {"draft_list_pending", "draft_submit", "draft_approve"}
 )
-"""Bookkeeping that reaches LinkedIn but is not an outreach action.
+"""SEQ-05 draft bookkeeping. These reach SQLite and nothing else.
+
+Listed separately because the reason they are unmetered is different from
+everything else in `UNMETERED_ACTIONS`: those touch LinkedIn but are not
+outreach, while these never touch LinkedIn at all. Generating and approving a
+draft must cost zero LinkedIn budget, which is the whole reason ICP
+qualification is affordable enough to run before the invite step.
+"""
+
+UNMETERED_ACTIONS: frozenset[str] = (
+    frozenset(
+        {
+            "login",
+            "login_secure",
+            "browser_close",
+            "post_comment_batch",
+            CONNECTION_ACCEPTED_ACTION,
+        }
+    )
+    | DRAFT_ACTIONS
+)
+"""Bookkeeping that is not an outreach action.
 
 Logging in cannot be rate limited without deadlocking recovery, closing the
 browser touches nobody, a batch wrapper is metered through the individual
 comments it posts, and an accepted invitation is something the other person did.
+The SEQ-05 draft actions in `DRAFT_ACTIONS` never leave the database.
+
+The metered universe is closed by exclusion, so anything left out of this set
+spends the account's daily and hourly LinkedIn budget from its first logged row.
 """
 
 APPROVAL_REQUIRED_ACTIONS: frozenset[str] = frozenset(
