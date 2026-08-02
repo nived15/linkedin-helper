@@ -9,7 +9,16 @@ applyTo: "**/*.py"
 
 - Always call `load_cookies()` before navigating to LinkedIn. Only call `login_linkedin_secure()` if cookies are missing or expired.
 - After every successful action, call `save_cookies()` to persist the session.
-- If a challenge page or unexpected URL appears, raise an error immediately — do not retry silently.
+- If a challenge page or unexpected URL appears, halt immediately. Do not retry silently.
+
+## Challenge Detection
+
+- Check the page after every navigation. `assert_page_clear(page, account_id=..., action_type=...)` from `linkedin_mcp.safety` is the only detector, and `linkedin_mcp/browser/navigate.py` already calls it for you.
+- Every challenge marker lives in `linkedin_mcp/safety/detect.py`. URL fragments, warning banner text and captcha frame patterns are detection rules, so they do not belong in the page selector registry. Add a new one to the list in `detect.py` and every navigation picks it up.
+- A hit flips `accounts.state` to `challenged` or `logged_out` and writes a `safety_events` row. That is the whole handover: `guard_action(...)` refuses every later action on its own once the state has moved.
+- Never write `state` back to `active`. Only a human clears a challenge, and no run of clean navigations proves that happened.
+- Tools catch `DetectionHalt` and return `halt.to_result()`. Returning it is not swallowing it, because the state has already moved by then. Carrying on with the run is.
+- Detection is idempotent. A second hit on the same challenge still halts, but it does not flip the row again or raise a second alert.
 
 ## Rate Limiting
 
@@ -30,7 +39,7 @@ applyTo: "**/*.py"
 
 - Wrap all Playwright operations in try/except. Catch `TimeoutError` and `Error` from Playwright specifically.
 - On failure, return a dict with `{"status": "error", "message": "descriptive message"}` — never raise unhandled exceptions from MCP tools.
-- If LinkedIn shows a login wall or challenge, return `{"status": "error", "message": "Session expired: ..."}` so agents know to re-auth.
+- If LinkedIn shows a login wall or challenge, return `halt.to_result()` from `linkedin_mcp.safety.detect`. It carries the `Session expired: ...` message plus the marker that matched, so agents know to re-auth and a human can see why.
 
 ## Data Files
 

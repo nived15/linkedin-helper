@@ -1,9 +1,9 @@
 """Safety layer: hard caps, working hours and the gate every action passes.
 
-`limits` does the arithmetic and `gate` makes the decision. CORE-05 adds a
-`detect` module for challenge and interstitial detection alongside them, so
-imports here stay one flat list per module rather than a hierarchy that would
-need rearranging to fit it in.
+`limits` does the arithmetic and `gate` makes the decision. `detect` reads the
+page after a navigation and stops the run when LinkedIn served a challenge
+instead, so imports here stay one flat list per module rather than a hierarchy
+that would need rearranging to fit it in.
 """
 
 from linkedin_mcp.core.config import (
@@ -18,6 +18,29 @@ from linkedin_mcp.core.config import (
     ActionCeiling,
     ceiling_for,
     profile_view_action,
+)
+from linkedin_mcp.safety.detect import (
+    BANNER_MARKERS,
+    CAPTCHA_MARKERS,
+    CAPTCHA_SELECTORS,
+    CHALLENGE_PATH_MARKERS,
+    DETECTION_EVENT_KINDS,
+    HALTED_STATES,
+    LOGIN_PATH_MARKERS,
+    ChallengeDetected,
+    ChallengeSignal,
+    Detection,
+    DetectionHalt,
+    HaltRecord,
+    InterstitialDetected,
+    LoggedOutDetected,
+    PageUnreadable,
+    assert_page_clear,
+    halt_for,
+    inspect_page,
+    open_challenges,
+    recent_safety_events,
+    record_halt,
 )
 from linkedin_mcp.safety.gate import (
     AccountChallenged,
@@ -76,18 +99,33 @@ __all__ = [
     "ActionCeiling",
     "ActionDisabled",
     "ApprovalRequired",
+    "BANNER_MARKERS",
     "Blacklisted",
     "Budget",
+    "CAPTCHA_MARKERS",
+    "CAPTCHA_SELECTORS",
+    "CHALLENGE_PATH_MARKERS",
+    "ChallengeDetected",
+    "ChallengeSignal",
     "DEDUPE_WINDOW_DAYS",
+    "DETECTION_EVENT_KINDS",
     "DailyCapReached",
+    "Detection",
+    "DetectionHalt",
     "DuplicateAction",
     "GLOBAL_DAILY_CEILING",
     "GLOBAL_HOURLY_CEILING",
+    "HALTED_STATES",
     "HARD_CEILINGS",
+    "HaltRecord",
     "HourlyCapReached",
+    "InterstitialDetected",
+    "LOGIN_PATH_MARKERS",
     "Lease",
+    "LoggedOutDetected",
     "METERED_ACTIONS",
     "PENDING_INVITE_CEILING",
+    "PageUnreadable",
     "PendingInviteCeilingReached",
     "SafetyError",
     "SafetyGate",
@@ -101,6 +139,7 @@ __all__ = [
     "account_limit",
     "acquire",
     "actions_in_window",
+    "assert_page_clear",
     "ceiling_for",
     "daily_budget",
     "daily_jitter_fraction",
@@ -108,13 +147,18 @@ __all__ = [
     "global_actions_in_window",
     "global_daily_budget",
     "guard_action",
+    "halt_for",
     "hourly_budget",
+    "inspect_page",
     "is_within_working_hours",
     "metered_universe",
+    "open_challenges",
     "pending_invites",
     "profile_view_action",
     "ramp_up_cap",
     "ramp_up_fraction",
+    "recent_safety_events",
+    "record_halt",
     "reset_gate",
     "set_gate",
     "shrink_for_jitter",

@@ -9,7 +9,12 @@ from urllib.parse import quote
 from dotenv import load_dotenv
 from fastmcp import Context, FastMCP
 
-from linkedin_mcp.audit import audit_linkedin_action, record_tool_result
+from linkedin_mcp.audit import (
+    audit_linkedin_action,
+    current_account_id,
+    record_tool_result,
+)
+from linkedin_mcp.browser import SessionExpiredError
 from linkedin_mcp.browser.humanize import (
     cooldown,
     dwell_and_click,
@@ -25,7 +30,7 @@ from linkedin_mcp.browser.selectors import (
 )
 from linkedin_mcp.browser.session import BrowserSession, load_cookies, save_cookies
 from linkedin_mcp.core.config import profile_view_action
-from linkedin_mcp.safety import guard_action
+from linkedin_mcp.safety import DetectionHalt, assert_page_clear, guard_action
 
 # Set up logging to stderr only
 logging.basicConfig(
@@ -74,6 +79,47 @@ def handle_notification(ctx, notification_type, params=None):
             logger.debug(f"Notification: {notification_type} - {params}")
     except Exception as e:
         logger.error(f"Error handling notification: {str(e)}")
+
+def acting_account_id():
+    """Resolve the account these tools act as, or None when the log is down.
+
+    A tool that cannot name its account still has to halt on a challenge. It
+    just cannot write the halt down, and saying so beats guessing an id and
+    stopping a session nobody challenged.
+    """
+    try:
+        return current_account_id()
+    except Exception as exc:
+        logger.error(f"Could not resolve the acting account: {exc}")
+        return None
+
+
+async def check_page_is_ours(page, action_type: str | None = None):
+    """Return a tool result when LinkedIn served an interstitial, else None.
+
+    This runs after every navigation. `assert_page_clear` flips the account out
+    of `active` and writes the `safety_events` row before it raises, so returning
+    the halt as an ordinary result is not swallowing it: `guard_action` refuses
+    every later action on its own once the state has moved.
+    """
+    try:
+        await assert_page_clear(
+            page,
+            account_id=acting_account_id(),
+            action_type=action_type,
+        )
+    except DetectionHalt as halt:
+        logger.error(f"Halting {action_type or 'navigation'}: {halt}")
+        return halt.to_result()
+    return None
+
+
+def session_expired_result(error: SessionExpiredError) -> dict:
+    """Turn a halted profile navigation into a tool result, detail intact."""
+    if error.halt is not None:
+        return error.halt.to_result()
+    return {"status": "error", "message": str(error)}
+
 
 async def wait_for_selector_fallback(page, name: str, timeout: int = 10000):
     """Wait for the first matching selector in the configured fallback order."""
@@ -237,14 +283,15 @@ async def get_linkedin_profile(username: str, ctx: Context, direct: bool = False
     async with BrowserSession(platform='linkedin', headless=False) as session:
         try:
             page = await session.new_page()
-            await goto_profile(page, f'https://www.linkedin.com/in/{username}', direct=direct)
-            
-            # Check if we're logged in
-            if 'login' in page.url:
-                return {
-                    "status": "error",
-                    "message": "Not logged in. Please run login_linkedin tool first"
-                }
+            try:
+                await goto_profile(
+                    page,
+                    f'https://www.linkedin.com/in/{username}',
+                    direct=direct,
+                    account_id=acting_account_id(),
+                )
+            except SessionExpiredError as expired:
+                return session_expired_result(expired)
             
             # Check if profile page loaded
             if '/in/' not in page.url:
@@ -349,12 +396,9 @@ async def browse_linkedin_feed(ctx: Context, count: int = 5) -> dict:
         try:
             page = await session.new_page('https://www.linkedin.com/feed/')
             
-            # Check if we're logged in
-            if 'login' in page.url:
-                return {
-                    "status": "error", 
-                    "message": "Not logged in. Please run login_linkedin tool first"
-                }
+            halted = await check_page_is_ours(page, "feed_browse")
+            if halted:
+                return halted
                 
             ctx.info(f"Browsing feed for {count} posts...")
             
@@ -504,12 +548,9 @@ async def search_linkedin_profiles(query: str, ctx: Context, count: int = 5) -> 
             search_url = f'https://www.linkedin.com/search/results/people/?keywords={quote(query)}'
             page = await session.new_page(search_url)
             
-            # Check if we're logged in
-            if 'login' in page.url:
-                return {
-                    "status": "error", 
-                    "message": "Not logged in. Please run login_linkedin tool first"
-                }
+            halted = await check_page_is_ours(page, "profile_search")
+            if halted:
+                return halted
             
             ctx.info(f"Searching for profiles matching: {query}")
             report_progress(ctx, 20, 100, "Loading search results...")
@@ -596,14 +637,15 @@ async def view_linkedin_profile(profile_url: str, ctx: Context, direct: bool = F
     async with BrowserSession(platform='linkedin') as session:
         try:
             page = await session.new_page()
-            await goto_profile(page, profile_url, direct=direct)
-            
-            # Check if we're logged in
-            if 'login' in page.url:
-                return {
-                    "status": "error", 
-                    "message": "Not logged in. Please run login_linkedin tool first"
-                }
+            try:
+                await goto_profile(
+                    page,
+                    profile_url,
+                    direct=direct,
+                    account_id=acting_account_id(),
+                )
+            except SessionExpiredError as expired:
+                return session_expired_result(expired)
                 
             ctx.info(f"Viewing profile: {profile_url}")
             
@@ -704,12 +746,9 @@ async def interact_with_linkedin_post(post_url: str, ctx: Context, action: str =
         try:
             page = await session.new_page(post_url)
             
-            # Check if we're logged in
-            if 'login' in page.url:
-                return {
-                    "status": "error", 
-                    "message": "Not logged in. Please run login_linkedin tool first"
-                }
+            halted = await check_page_is_ours(page, f"post_{action}")
+            if halted:
+                return halted
                 
             # Wait for post to load
             await wait_for_selector_fallback(page, 'post_detail_container', timeout=10000)
@@ -843,14 +882,15 @@ async def send_connection_request(profile_url: str, ctx: Context, note: str | No
     async with BrowserSession(platform='linkedin', headless=False) as session:
         try:
             page = await session.new_page()
-            await goto_profile(page, profile_url, direct=direct)
-            
-            # Check if we're logged in
-            if 'login' in page.url:
-                return {
-                    "status": "error",
-                    "message": "Not logged in. Please run login_linkedin tool first"
-                }
+            try:
+                await goto_profile(
+                    page,
+                    profile_url,
+                    direct=direct,
+                    account_id=acting_account_id(),
+                )
+            except SessionExpiredError as expired:
+                return session_expired_result(expired)
             
             ctx.info(f"Sending connection request to {profile_url}")
             
@@ -953,11 +993,9 @@ async def search_linkedin_posts(query: str, ctx: Context, count: int = 10, sort_
                 search_url = f'https://www.linkedin.com/search/results/content/?keywords={quote(query)}'
             page = await session.new_page(search_url)
 
-            if 'login' in page.url or 'authwall' in page.url:
-                return {
-                    "status": "error",
-                    "message": "Not logged in. Please run login_linkedin_secure tool first"
-                }
+            halted = await check_page_is_ours(page, "post_search")
+            if halted:
+                return halted
 
             if ctx:
                 ctx.info(f"Searching LinkedIn posts for: {query}")
@@ -1215,11 +1253,9 @@ async def comment_on_approved_posts(approved_posts: list, ctx: Context) -> dict:
     async with BrowserSession(platform='linkedin', headless=False) as session:
         try:
             page = await session.new_page('https://www.linkedin.com/feed/')
-            if 'login' in page.url or 'authwall' in page.url:
-                return {
-                    "status": "error",
-                    "message": "Not logged in. Please run login_linkedin_secure tool first"
-                }
+            halted = await check_page_is_ours(page, "post_comment")
+            if halted:
+                return {**halted, "results": []}
 
             total = len(approved_posts)
 
@@ -1253,9 +1289,15 @@ async def comment_on_approved_posts(approved_posts: list, ctx: Context) -> dict:
 
                     await page.goto(nav_url, wait_until='domcontentloaded', timeout=60000)
 
-                    if 'login' in page.url or 'authwall' in page.url:
-                        record_comment_outcome(results, post_url, "error", "Session expired")
-                        continue
+                    halted = await check_page_is_ours(page, "post_comment")
+                    if halted:
+                        # A challenge stops the whole batch. Walking on to the
+                        # next post would be handing LinkedIn the pattern it
+                        # just flagged.
+                        record_comment_outcome(
+                            results, post_url, "error", halted["message"]
+                        )
+                        return {**halted, "results": results}
 
                     await wait_for_selector_fallback(page, 'post_detail_container', timeout=20000)
                     await pace(1.5)

@@ -1,12 +1,16 @@
 """The paged fetch loop: four stops, one gate call per fetch, no tight loop."""
 
 import asyncio
+from pathlib import Path
 
 import pytest
 from test_scrape_fakes import FakeGate, FakePage, FakeRecorder, RecordingSleep
 
+from linkedin_mcp.audit.log import AuditLog, reset_audit_log, set_audit_log
 from linkedin_mcp.browser.humanize import FAST, Humanizer
 from linkedin_mcp.browser.navigate import SessionExpiredError
+from linkedin_mcp.safety.detect import ChallengeDetected, open_challenges
+from linkedin_mcp.safety.gate import guard_action, reset_gate
 from linkedin_mcp.scrape.paginate import (
     MAX_SEARCH_PAGE,
     PLATFORM_RESULT_CEILING,
@@ -18,6 +22,11 @@ from linkedin_mcp.scrape.paginate import (
 
 ACCOUNT = 7
 ACTION = "profile_search"
+# The package re-exports the `paginate` function under the module's own name, so
+# the file is reached by path rather than through `paginate_module.__file__`.
+PAGINATE_SOURCE = (
+    Path(__file__).resolve().parents[1] / "linkedin_mcp" / "scrape" / "paginate.py"
+)
 
 
 def run(coroutine):
@@ -292,6 +301,135 @@ def test_an_authwall_redirect_propagates_instead_of_looking_like_no_results():
                 record=FakeRecorder(),
             )
         )
+
+
+def test_a_challenge_mid_pagination_stops_the_account_and_not_just_the_run(tmp_path):
+    """Raising is not the job. Recording is.
+
+    A search run walks up to a hundred pages, which makes this the path most
+    likely to meet a checkpoint first. Stopping the run and leaving the account
+    `active` means the very next tool call walks straight back into the same
+    checkpoint, because the gate has no idea anything happened. So this asserts
+    the handover rather than the exception: state flipped, event on the timeline,
+    and the next `guard_action` refusing on its own.
+    """
+    log = AuditLog.open(tmp_path / "linkedin-helper.db")
+    set_audit_log(log)
+    reset_gate()
+    try:
+        account_id = log.ensure_account("paginate@example.com")
+        surface = Surface()
+        page = FakePage()
+
+        async def fetch(target, page_number):
+            if page_number >= 3:
+                target.url = "https://www.linkedin.com/checkpoint/challenge/AgH7Xm"
+            await surface.fetch(target, page_number)
+
+        with pytest.raises(SessionExpiredError, match="Session expired") as expired:
+            run(
+                paginate(
+                    page,
+                    action_type=ACTION,
+                    account_id=account_id,
+                    fetch=fetch,
+                    extract=surface.extract,
+                    key=lambda item: item,
+                    limit=100,
+                    humanizer=pacer(),
+                    guard=FakeGate(),
+                    record=FakeRecorder(),
+                )
+            )
+
+        assert isinstance(expired.value.halt, ChallengeDetected)
+        assert expired.value.detection.signal.marker == "/checkpoint/"
+        assert surface.fetched == [1, 2, 3]
+
+        state = log.connection.execute(
+            "SELECT state FROM accounts WHERE id = ?", (account_id,)
+        ).fetchone()[0]
+        assert state == "challenged"
+
+        events = log.connection.execute(
+            "SELECT kind, severity FROM safety_events WHERE account_id = ?",
+            (account_id,),
+        ).fetchall()
+        assert [tuple(event) for event in events] == [("challenge_detected", "critical")]
+
+        assert open_challenges(log.connection)[0]["account_id"] == account_id
+
+        refusal = guard_action(ACTION, account_id=account_id)
+        assert refusal is not None
+        assert refusal["reason"] == "account_challenged"
+    finally:
+        reset_audit_log()
+        reset_gate()
+        log.close()
+
+
+def test_the_halt_is_filed_under_the_search_that_was_actually_running(tmp_path):
+    """A post search that gets challenged must not be filed as a profile search.
+
+    The paged loop serves both people search and post search. Hardcoding one
+    action type in the delegation reads as harmless, because the account still
+    flips and the run still stops. The damage shows up later, when the timeline
+    is used to work out which budget tripped a checkpoint and every post-search
+    halt is sitting under the wrong one.
+    """
+    log = AuditLog.open(tmp_path / "linkedin-helper.db")
+    set_audit_log(log)
+    reset_gate()
+    try:
+        account_id = log.ensure_account("posts@example.com")
+        surface = Surface()
+        page = FakePage()
+
+        async def fetch(target, page_number):
+            if page_number >= 2:
+                target.url = "https://www.linkedin.com/checkpoint/challenge/AgH7Xm"
+            await surface.fetch(target, page_number)
+
+        with pytest.raises(SessionExpiredError):
+            run(
+                paginate(
+                    page,
+                    action_type="post_search",
+                    account_id=account_id,
+                    fetch=fetch,
+                    extract=surface.extract,
+                    key=lambda item: item,
+                    limit=100,
+                    humanizer=pacer(),
+                    guard=FakeGate(),
+                    record=FakeRecorder(),
+                )
+            )
+
+        refusals = log.connection.execute(
+            "SELECT action_type, outcome FROM actions_log WHERE account_id = ?",
+            (account_id,),
+        ).fetchall()
+        assert ("post_search", "refused") in [tuple(row) for row in refusals]
+        assert "profile_search" not in {row[0] for row in refusals}
+    finally:
+        reset_audit_log()
+        reset_gate()
+        log.close()
+
+
+def test_the_paged_loop_keeps_no_challenge_markers_of_its_own():
+    """One list of markers, in `detect`. A second copy drifts out of date.
+
+    A local copy is also the shape of the original bug. It raises, which looks
+    like it works, while recording nothing.
+    """
+    source = PAGINATE_SOURCE.read_text(encoding="utf-8")
+
+    assert "AUTHWALL_MARKERS" not in source
+    for marker in ('"/authwall"', '"/uas/login"', '"/checkpoint"', '"/login"'):
+        assert marker not in source
+    assert "navigate_assert_session_alive" in source
 
 
 def test_each_page_is_handed_to_the_caller_before_the_next_fetch():
