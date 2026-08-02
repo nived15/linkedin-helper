@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updatedAt": "2026-08-02T04:28:04.172Z",
+  "updatedAt": "2026-08-02T04:28:19.553Z",
   "tasks": {
     "CORE-01": {
       "status": "done",
@@ -17,9 +17,11 @@
       "prMerged": true
     },
     "CORE-03": {
-      "status": "pending",
+      "status": "done",
       "notes": "Highest-priority item. Today limits exist only as English sentences in copilot-instructions.md.",
-      "issueNumber": 7
+      "issueNumber": 7,
+      "prNumber": 38,
+      "prMerged": true
     },
     "CORE-04": {
       "status": "done",
