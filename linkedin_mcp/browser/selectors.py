@@ -354,6 +354,228 @@ SELECTORS: dict[str, tuple[str, ...]] = {
     "profile_education_dates": (
         ".pv-entity__dates span:not(.visually-hidden)",
     ),
+    # --- SCRAPE-03 profile detail -----------------------------------------
+    # Everything the deep-scraper reads off one rendered /in/ page. The older
+    # `profile_*` groups above stay exactly as they are because
+    # `linkedin_browser_mcp.py` still reads them; these are the names
+    # `linkedin_mcp.scrape.profile_extract` uses.
+    #
+    # Verification status: written from LinkedIn's published markup patterns
+    # rather than from a live logged-in session. Treat the leading entry of
+    # every group as a hypothesis. The fallback chains are the point: an
+    # outdated first selector degrades to None rather than breaking the run.
+    "profile_detail_top_card": (
+        'section[data-view-name="profile-card"]',
+        "section[data-member-id]",
+        "div.ph5.pb5",
+        ".pv-top-card",
+        ".top-card-layout",
+    ),
+    "profile_detail_member_urn": (
+        "section[data-member-id]",
+        "[data-member-id]",
+        "main [data-entity-urn]",
+        "[data-urn]",
+    ),
+    "profile_detail_name": (
+        'h1.text-heading-xlarge',
+        "main h1",
+        ".pv-top-card--list .text-heading-xlarge",
+        "h1",
+    ),
+    "profile_detail_headline": (
+        'div.text-body-medium.break-words',
+        ".pv-top-card--list .text-body-medium",
+        ".text-body-medium.break-words",
+    ),
+    "profile_detail_location": (
+        'span.text-body-small.inline.t-black--light.break-words',
+        ".pv-top-card--list-bullet .text-body-small",
+        ".text-body-small.inline.t-black--light.break-words",
+    ),
+    "profile_detail_about": (
+        'section:has(div#about) div.inline-show-more-text span[aria-hidden="true"]',
+        "section:has(div#about) .display-flex.ph5.pv3",
+        ".pv-shared-text-with-see-more .inline-show-more-text",
+        ".display-flex.ph5.pv3 .visually-hidden",
+    ),
+    "profile_detail_avatar": (
+        "img.pv-top-card-profile-picture__image--show",
+        'img[class*="profile-photo-edit__preview"]',
+        "main img.presence-entity__image",
+        ".pv-top-card__photo img",
+    ),
+    "profile_detail_distance": (
+        "span.dist-value",
+        ".pv-top-card__distance-badge .dist-value",
+        'span[class*="distance-badge"]',
+        ".distance-badge",
+    ),
+    # One group for both counts. LinkedIn renders "500+ connections" and
+    # "12,345 followers" as sibling list items with the same classes, so the
+    # reader classifies them by their own text rather than by two selectors
+    # that would each match the other's node.
+    "profile_detail_network_stats": (
+        "ul.pv-top-card--list-bullet li",
+        ".pv-top-card--list-bullet .t-bold",
+        ".pvs-header__optional-link span.t-bold",
+        "main span.t-bold",
+    ),
+    "profile_detail_mutual_connections": (
+        'a[href*="facetConnectionOf"]',
+        'a[href*="/search/results/people/"][href*="connectionOf"]',
+        ".pv-top-card--list-bullet a span",
+        'span[class*="mutual"]',
+    ),
+    "profile_detail_premium_badge": (
+        'li-icon[type="linkedin-bug"][aria-label*="Premium"]',
+        'svg[data-test-icon="premium-chip-xsmall"]',
+        '[data-test-icon="premium-app-xsmall"]',
+        ".pv-member-badge--for-top-card",
+    ),
+    "profile_detail_influencer_badge": (
+        'li-icon[type="linkedin-influencer-color-icon"]',
+        'svg[data-test-icon="linkedin-influencer-color-small"]',
+        ".pv-member-badge__influencer-icon",
+    ),
+    "profile_detail_openlink_badge": (
+        'li-icon[type="linkedin-openlink-icon"]',
+        'svg[data-test-icon="open-link-small"]',
+        ".pv-member-badge--open-link",
+    ),
+    "profile_detail_jobseeker_badge": (
+        'section:has(div#open_to) a[href*="opportunities/job-opportunities"]',
+        'div[class*="open-to-work"]',
+        'img[class*="profile-photo-edit__preview--open-to-work"]',
+        ".pv-open-to-carousel-card--job-seeker",
+    ),
+    "profile_detail_hiring_badge": (
+        'section:has(div#open_to) a[href*="opportunities/hiring"]',
+        'div[class*="hiring-frame"]',
+        'img[class*="profile-photo-edit__preview--hiring"]',
+        ".pv-open-to-carousel-card--hiring",
+    ),
+    "profile_experience_section": (
+        "section:has(div#experience)",
+        'section[data-view-name="profile-card"]:has(#experience)',
+        "#experience-section",
+        "main section:has(#experience)",
+    ),
+    "profile_experience_entry": (
+        "li.artdeco-list__item",
+        "div.pvs-entity",
+        ".pv-entity__position-group-pager",
+        ".pv-entity__summary-info",
+    ),
+    "profile_experience_entry_title": (
+        'div.t-bold span[aria-hidden="true"]',
+        'span.mr1.t-bold span[aria-hidden="true"]',
+        ".pv-entity__summary-info h3",
+        "h3",
+    ),
+    "profile_experience_entry_company": (
+        'span.t-14.t-normal span[aria-hidden="true"]',
+        ".pv-entity__secondary-title",
+        "span.t-14.t-normal",
+    ),
+    "profile_experience_entry_company_link": (
+        'a[href*="/company/"]',
+        'a[data-field="experience_company_logo"]',
+    ),
+    "profile_experience_entry_dates": (
+        'span.t-14.t-normal.t-black--light span[aria-hidden="true"]',
+        ".pv-entity__date-range span:not(.visually-hidden)",
+        "span.pvs-entity__caption-wrapper",
+    ),
+    "profile_experience_entry_location": (
+        'span.t-14.t-normal.t-black--light:nth-of-type(2) span[aria-hidden="true"]',
+        ".pv-entity__location span:not(.visually-hidden)",
+        'span[class*="entity__location"]',
+    ),
+    "profile_education_section": (
+        "section:has(div#education)",
+        'section[data-view-name="profile-card"]:has(#education)',
+        "#education-section",
+        "main section:has(#education)",
+    ),
+    "profile_education_entry": (
+        "li.artdeco-list__item",
+        "div.pvs-entity",
+        ".pv-education-entity",
+        ".pv-profile-section__list-item",
+    ),
+    "profile_education_entry_school": (
+        'div.t-bold span[aria-hidden="true"]',
+        ".pv-entity__school-name",
+        "h3",
+    ),
+    "profile_education_entry_degree": (
+        'span.t-14.t-normal span[aria-hidden="true"]',
+        ".pv-entity__degree-name .pv-entity__comma-item",
+        "span.t-14.t-normal",
+    ),
+    "profile_education_entry_dates": (
+        'span.t-14.t-normal.t-black--light span[aria-hidden="true"]',
+        ".pv-entity__dates span:not(.visually-hidden)",
+        "span.pvs-entity__caption-wrapper",
+    ),
+    "profile_skills_section": (
+        "section:has(div#skills)",
+        'section[data-view-name="profile-card"]:has(#skills)',
+        "#skills-section",
+        "main section:has(#skills)",
+    ),
+    "profile_skills_entry": (
+        "li.artdeco-list__item",
+        "div.pvs-entity",
+        ".pv-skill-category-entity",
+    ),
+    "profile_skills_entry_name": (
+        'div.t-bold span[aria-hidden="true"]',
+        ".pv-skill-category-entity__name-text",
+        "span.t-bold",
+    ),
+    "profile_skills_entry_endorsements": (
+        'span.t-14.t-normal.t-black--light span[aria-hidden="true"]',
+        ".pv-skill-category-entity__endorsement-count",
+        'span[class*="endorsement-count"]',
+    ),
+    # Contact info opens as an in-page overlay from the top card. It is reached
+    # by clicking, never by loading /overlay/contact-info/ directly, because a
+    # direct load spends the 40-a-day profile budget CORE-04 exists to protect.
+    "profile_contact_info_trigger": (
+        "#top-card-text-details-contact-info",
+        'a[href*="overlay/contact-info"]',
+        'a[data-control-name="contact_see_more"]',
+        'button:has-text("Contact info")',
+    ),
+    "profile_contact_info_modal": (
+        "div.pv-profile-section__section-info",
+        'div[role="dialog"] .artdeco-modal__content',
+        ".pv-contact-info",
+        'div[role="dialog"]',
+    ),
+    "profile_contact_info_section": (
+        "section.pv-contact-info__contact-type",
+        ".pv-contact-info__contact-type",
+        'div[class*="contact-info"] section',
+    ),
+    "profile_contact_info_section_header": (
+        "h3.pv-contact-info__header",
+        ".pv-contact-info__header",
+        "h3",
+    ),
+    "profile_contact_info_section_value": (
+        ".pv-contact-info__contact-link",
+        ".pv-contact-info__ci-container span",
+        "a",
+        "span",
+    ),
+    "profile_contact_info_close": (
+        'button[aria-label="Dismiss"]',
+        "button.artdeco-modal__dismiss",
+        'button[data-test-modal-close-btn]',
+    ),
     # --- Legacy post search DOM walk -------------------------------------
     # `linkedin_browser_mcp.py` still walks the DOM with these. The scrape
     # package uses the `post_result_*` group below instead.
