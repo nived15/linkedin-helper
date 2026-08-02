@@ -24,6 +24,8 @@ from linkedin_mcp.browser.selectors import (
     selector_payload,
 )
 from linkedin_mcp.browser.session import BrowserSession, load_cookies, save_cookies
+from linkedin_mcp.core.config import profile_view_action
+from linkedin_mcp.safety import guard_action
 
 # Set up logging to stderr only
 logging.basicConfig(
@@ -217,7 +219,10 @@ async def login_linkedin_secure(ctx: Context | None = None) -> dict:
     return await login_linkedin(username, password, ctx)
 
 @mcp.tool()
-@audit_linkedin_action("profile_view", target="username")
+@audit_linkedin_action(
+    lambda bound: profile_view_action(bool(bound.get("direct"))),
+    target="username",
+)
 async def get_linkedin_profile(username: str, ctx: Context, direct: bool = False) -> dict:
     """Get LinkedIn profile information including follower count and profile views.
 
@@ -225,6 +230,10 @@ async def get_linkedin_profile(username: str, ctx: Context, direct: bool = False
     through the LinkedIn search bar. LinkedIn caps direct profile loads, so this
     is an escape hatch rather than the normal path.
     """
+    refusal = guard_action(profile_view_action(direct))
+    if refusal:
+        return refusal
+
     async with BrowserSession(platform='linkedin', headless=False) as session:
         try:
             page = await session.new_page()
@@ -331,7 +340,11 @@ async def browse_linkedin_feed(ctx: Context, count: int = 5) -> dict:
     """
     posts = []
     errors = []
-    
+
+    refusal = guard_action("feed_browse")
+    if refusal:
+        return refusal
+
     async with BrowserSession(platform='linkedin') as session:
         try:
             page = await session.new_page('https://www.linkedin.com/feed/')
@@ -482,6 +495,10 @@ async def browse_linkedin_feed(ctx: Context, count: int = 5) -> dict:
 @audit_linkedin_action("profile_search", target="query", capture=("count",))
 async def search_linkedin_profiles(query: str, ctx: Context, count: int = 5) -> dict:
     """Search for LinkedIn profiles matching a query"""
+    refusal = guard_action("profile_search")
+    if refusal:
+        return refusal
+
     async with BrowserSession(platform='linkedin') as session:
         try:
             search_url = f'https://www.linkedin.com/search/results/people/?keywords={quote(query)}'
@@ -556,7 +573,10 @@ async def search_linkedin_profiles(query: str, ctx: Context, count: int = 5) -> 
             }
         
 @mcp.tool() 
-@audit_linkedin_action("profile_view", target="profile_url")
+@audit_linkedin_action(
+    lambda bound: profile_view_action(bool(bound.get("direct"))),
+    target="profile_url",
+)
 async def view_linkedin_profile(profile_url: str, ctx: Context, direct: bool = False) -> dict:
     """Visit and extract data from a specific LinkedIn profile.
 
@@ -568,7 +588,11 @@ async def view_linkedin_profile(profile_url: str, ctx: Context, direct: bool = F
             "status": "error",
             "message": "Invalid LinkedIn profile URL. Should contain 'linkedin.com/in/'"
         }
-        
+
+    refusal = guard_action(profile_view_action(direct))
+    if refusal:
+        return refusal
+
     async with BrowserSession(platform='linkedin') as session:
         try:
             page = await session.new_page()
@@ -671,7 +695,11 @@ async def interact_with_linkedin_post(post_url: str, ctx: Context, action: str =
             "status": "error",
             "message": f"Invalid action. Choose from: {', '.join(valid_actions)}"
         }
-        
+
+    refusal = guard_action(f"post_{action}", approved=True)
+    if refusal:
+        return refusal
+
     async with BrowserSession(platform='linkedin', headless=False) as session:
         try:
             page = await session.new_page(post_url)
@@ -807,7 +835,11 @@ async def send_connection_request(profile_url: str, ctx: Context, note: str | No
             "status": "error",
             "message": f"Connection note too long ({len(note)} chars). Max 300 characters."
         }
-    
+
+    refusal = guard_action("connection_request", approved=True)
+    if refusal:
+        return refusal
+
     async with BrowserSession(platform='linkedin', headless=False) as session:
         try:
             page = await session.new_page()
@@ -908,6 +940,10 @@ async def search_linkedin_posts(query: str, ctx: Context, count: int = 10, sort_
         dict: status, query, count, and posts array.
               Each post has: post_number, post_url, author, content, timestamp, likes, comments
     """
+    refusal = guard_action("post_search")
+    if refusal:
+        return refusal
+
     async with BrowserSession(platform='linkedin', headless=False) as session:
         try:
             if sort_by == "date_posted":
@@ -1165,10 +1201,14 @@ async def comment_on_approved_posts(approved_posts: list, ctx: Context) -> dict:
         ctx: MCP context
 
     Returns:
-        dict: status, summary (total/succeeded/failed), and per-post results
+        dict: status, summary (total/succeeded/refused/failed), and per-post results
     """
     if not approved_posts:
         return {"status": "error", "message": "No posts provided"}
+
+    refusal = guard_action("post_comment", approved=True)
+    if refusal:
+        return {**refusal, "results": []}
 
     results = []
 
@@ -1194,6 +1234,11 @@ async def comment_on_approved_posts(approved_posts: list, ctx: Context) -> dict:
                         "skipped",
                         "Missing post_url or comment",
                     )
+                    continue
+
+                refusal = guard_action("post_comment", approved=True)
+                if refusal:
+                    results.append({"post_url": post_url, **refusal})
                     continue
 
                 report_progress(ctx, i, total, f"Commenting on post {i + 1}/{total}")
@@ -1267,11 +1312,17 @@ async def comment_on_approved_posts(approved_posts: list, ctx: Context) -> dict:
 
             await session.save_session(page)
             success_count = sum(1 for r in results if r['status'] == 'success')
+            refused_count = sum(1 for r in results if r['status'] == 'refused')
             report_progress(ctx, total, total, f"Done: {success_count}/{total} comments posted")
 
             return {
                 "status": "success",
-                "summary": {"total": total, "succeeded": success_count, "failed": total - success_count},
+                "summary": {
+                    "total": total,
+                    "succeeded": success_count,
+                    "refused": refused_count,
+                    "failed": total - success_count - refused_count,
+                },
                 "results": results
             }
 

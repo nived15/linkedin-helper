@@ -204,6 +204,27 @@ LinkedIn caps direct profile URL loads at roughly 40 per 24 hours, so
 `get_linkedin_profile`, `view_linkedin_profile` and `send_connection_request`
 only load a URL directly when you pass `direct=True`.
 
+### Safety caps
+
+Every action tool asks `linkedin_mcp/safety/gate.py` for permission before it
+opens a browser. The gate answers from the database, not from a model, so no
+prompt can talk it into one more invite.
+
+Usage is always a `COUNT(*)` over the append-only `actions_log` table rather
+than a stored counter, which means a crash, a restart or a manual edit can never
+leave it believing an account has budget it already spent. `HARD_CEILINGS` in
+`linkedin_mcp/core/config.py` sets the numbers no configuration can exceed: 30
+invites a day and 100 a week, 40 direct profile loads a day, 150 actions a day
+and 50 in any rolling hour. Rows in `account_limits` may tighten any of these
+and are clamped when they try to loosen one.
+
+On top of the caps the gate checks account state, working hours, a deterministic
+per-day jitter that trims each cap by nought to ten percent, a warm-up curve for
+accounts under two weeks old, the do-not-contact blacklist, and whether the same
+action already ran for the same lead. A refused action comes back as an ordinary
+tool result carrying a typed reason, and the refusal is written to `actions_log`
+with that reason, so a quiet night is explainable rather than mysterious.
+
 ---
 
 ## Setup
@@ -372,7 +393,7 @@ Weekly cap: 100 | Sent this week: N
 ## Rules
 
 1. **Human-in-the-loop**: Every post, comment, and connection request is staged for review before being published. Nothing goes live without approval.
-2. **Rate limiting**: Randomised delays (10–60s) between actions. Max 100 connection requests/week. Max 50 actions/hour.
+2. **Rate limiting**: Enforced in code by `linkedin_mcp/safety/gate.py`, not by prose. Randomised delays (10–60s) between actions, max 30 connection requests/day and 100/week, max 150 actions/day and 50/hour. Counts come from the append-only `actions_log`, and no configuration can raise a hard ceiling.
 3. **Session reuse**: Cookies are loaded from `sessions/` on every run. Login only happens when cookies are expired or missing.
 4. **Fail loudly**: If a session expires, a captcha appears, or LinkedIn returns an unexpected page — the tool reports the error clearly and stops. No silent retries.
 5. **Flat file storage**: All state in `data/` as Markdown. No database. Human-readable and editable at any point.
