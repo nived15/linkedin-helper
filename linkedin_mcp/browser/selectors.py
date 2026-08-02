@@ -1,10 +1,39 @@
-"""Centralised LinkedIn selector registry with ordered fallbacks."""
+"""Centralised LinkedIn selector registry with ordered fallbacks.
+
+Every selector LinkedIn automation touches lives here so a DOM change is one
+edit rather than a search across the codebase. A name maps to a tuple of CSS
+selectors tried in order, newest markup first, so a page that has already moved
+on still resolves through a later entry.
+
+Rebuilt for SCRAPE-01
+---------------------
+The search surface was written against LinkedIn's 2021 DOM and had rotted. The
+old `search_result_*` group pointed at `.entity-result` classes LinkedIn has
+since replaced, and the post search path had given up on selectors entirely and
+walked the DOM by hand looking for anything that resembled a post. Both are
+rebuilt here rather than patched.
+
+The modern targets lead with attribute hooks that survive LinkedIn's class name
+churn: `data-chameleon-result-urn` on a search result card, `data-view-name` on
+a rendered template, `data-urn` on an activity. Class based selectors follow as
+fallbacks, ending with the 2021 ones, because an ordered list costs nothing and
+a stale entry that never matches is harmless.
+
+Verification status
+-------------------
+The attribute hooks and the newer class names in this file were written from
+LinkedIn's published markup patterns, not from a live session at the time of
+writing. Treat the first entry of each rebuilt group as a hypothesis until it
+has been checked against a logged-in browser. The fallback chains exist exactly
+so that an unverified leading selector degrades instead of breaking the run.
+"""
 
 from __future__ import annotations
 
 from typing import Iterable
 
 SELECTORS: dict[str, tuple[str, ...]] = {
+    # --- Authentication ---------------------------------------------------
     "login_username": (
         "#username",
         'input[name="session_key"]',
@@ -13,12 +42,15 @@ SELECTORS: dict[str, tuple[str, ...]] = {
         "#password",
         'input[name="session_password"]',
     ),
+    # --- Profile page -----------------------------------------------------
     "profile_top_card": (
+        "section[data-member-id]",
         ".pv-top-card",
         ".top-card-layout",
     ),
     "profile_name": (
         ".pv-top-card--list .text-heading-xlarge",
+        "h1.text-heading-xlarge",
         "h1",
     ),
     "profile_headline": (
@@ -44,6 +76,7 @@ SELECTORS: dict[str, tuple[str, ...]] = {
         ".pv-shared-text-with-see-more .inline-show-more-text",
         ".display-flex.ph5.pv3 .visually-hidden",
     ),
+    # --- Global search bar ------------------------------------------------
     "global_search_trigger": (
         "button.search-global-typeahead__collapsed-search-button",
         "#global-nav-search button",
@@ -60,29 +93,114 @@ SELECTORS: dict[str, tuple[str, ...]] = {
         ".search-typeahead-v2__hit",
         ".search-global-typeahead__hit",
     ),
+    # --- People search results (rebuilt, SCRAPE-01) -----------------------
+    # `search_result_*` is the legacy group `linkedin_browser_mcp.py` reads.
+    # `people_result_*` is the rebuilt group the scrape package reads. Both
+    # resolve, so neither caller has to move before the other is ready.
     "search_result_container": (
+        "div[data-chameleon-result-urn]",
+        'div[data-view-name="search-entity-result-universal-template"]',
+        "li.reusable-search__result-container",
         ".reusable-search__result-container",
         ".search-results-container .entity-result",
     ),
     "search_result_title_link": (
+        'span[data-anonymize="person-name"]',
+        '.entity-result__title-text a span[aria-hidden="true"]',
         ".entity-result__title-text a",
-        ".app-aware-link span[aria-hidden=\"true\"]",
+        '.app-aware-link span[aria-hidden="true"]',
     ),
     "search_result_headline": (
         ".entity-result__primary-subtitle",
+        "div.t-14.t-black.t-normal",
     ),
     "search_result_location": (
         ".entity-result__secondary-subtitle",
+        "div.t-14.t-normal.t-black--light",
     ),
     "search_result_profile_link": (
+        'a[href*="/in/"]',
         ".app-aware-link",
     ),
     "search_result_distance": (
+        ".entity-result__badge-text",
+        "span.entity-result__badge span.dist-value",
         ".dist-value",
     ),
     "search_result_snippet": (
+        "p.entity-result__summary",
         ".entity-result__summary",
     ),
+    "people_result_item": (
+        "div[data-chameleon-result-urn]",
+        'div[data-view-name="search-entity-result-universal-template"]',
+        'ul[role="list"] > li:has(a[href*="/in/"])',
+        "li.reusable-search__result-container",
+        ".search-results-container .entity-result",
+    ),
+    "people_result_profile_link": (
+        'a[data-test-app-aware-link][href*="/in/"]',
+        'a[href*="/in/"]',
+        ".app-aware-link",
+    ),
+    "people_result_name": (
+        'span[data-anonymize="person-name"]',
+        'a[href*="/in/"] span[aria-hidden="true"]',
+        '.entity-result__title-text a span[aria-hidden="true"]',
+        ".entity-result__title-text",
+    ),
+    "people_result_headline": (
+        'div[data-anonymize="headline"]',
+        ".entity-result__primary-subtitle",
+        "div.t-14.t-black.t-normal",
+    ),
+    "people_result_location": (
+        'div[data-anonymize="location"]',
+        ".entity-result__secondary-subtitle",
+        "div.t-14.t-normal.t-black--light",
+    ),
+    "people_result_summary": (
+        "p.entity-result__summary",
+        ".entity-result__summary",
+    ),
+    "people_result_current_position": (
+        'p.entity-result__summary--2-lines',
+        ".entity-result__summary",
+    ),
+    "people_result_distance": (
+        ".entity-result__badge-text",
+        "span.entity-result__badge span.dist-value",
+        ".dist-value",
+    ),
+    "people_result_avatar": (
+        "img.presence-entity__image",
+        'img[class*="evi-image"]',
+        "img.EntityPhoto-circle-3",
+    ),
+    "people_result_premium_badge": (
+        'li-icon[type="linkedin-bug"][aria-label*="Premium"]',
+        'svg[data-test-icon="premium-chip-xsmall"]',
+        ".entity-result__badge--premium",
+    ),
+    "search_results_empty_state": (
+        'div[data-view-name="search-no-results"]',
+        ".search-reusable-search-no-results",
+        ".search-results__no-results",
+    ),
+    "search_results_scroll_container": (
+        "main#workspace",
+        "div.search-results-container",
+        "main",
+    ),
+    "search_pagination_next": (
+        "button.artdeco-pagination__button--next",
+        'button[aria-label="Next"]',
+    ),
+    "search_total_results": (
+        ".search-results-container h2",
+        "div.pb2.t-black--light.t-14",
+    ),
+    # --- Feed posts -------------------------------------------------------
     "feed_post_container": (
         '[data-urn*="urn:li:activity"]',
         '[data-id*="urn:li:activity"]',
@@ -94,6 +212,7 @@ SELECTORS: dict[str, tuple[str, ...]] = {
         'a[href*="/feed/update/"]',
     ),
     "feed_post_author_link": (
+        ".update-components-actor__meta-link",
         ".update-components-actor__container-link",
         ".feed-shared-actor__container-link",
         'a[href*="/in/"]',
@@ -108,6 +227,7 @@ SELECTORS: dict[str, tuple[str, ...]] = {
         'button[aria-label*="comment"]',
     ),
     "feed_post_author_name": (
+        '.update-components-actor__title span[aria-hidden="true"]',
         '.update-components-actor__name span[aria-hidden="true"]',
         ".update-components-actor__name",
         ".feed-shared-actor__name",
@@ -128,6 +248,7 @@ SELECTORS: dict[str, tuple[str, ...]] = {
         ".update-components-actor__sub-description",
         ".feed-shared-actor__sub-description",
     ),
+    # --- Single post detail ----------------------------------------------
     "post_detail_container": (
         ".feed-shared-update-v2",
         ".update-components-update-v2",
@@ -136,6 +257,7 @@ SELECTORS: dict[str, tuple[str, ...]] = {
     ),
     "post_detail_author": (
         ".feed-shared-actor__name",
+        '.update-components-actor__title span[aria-hidden="true"]',
         '.update-components-actor__name span[aria-hidden="true"]',
         ".update-components-actor__name",
     ),
@@ -178,6 +300,7 @@ SELECTORS: dict[str, tuple[str, ...]] = {
         'button:has-text("Repost")',
         "div[data-artdeco-is-focused] button",
     ),
+    # --- Invitations ------------------------------------------------------
     "connect_button": (
         'button[aria-label*="Invite"][aria-label*="connect"]',
         'button:has-text("Connect")',
@@ -203,6 +326,7 @@ SELECTORS: dict[str, tuple[str, ...]] = {
         'button[aria-label="Send now"]',
         'button:has-text("Send")',
     ),
+    # --- Profile detail sections -----------------------------------------
     "profile_experience_item": (
         "#experience-section .pv-entity__summary-info",
     ),
@@ -230,6 +354,9 @@ SELECTORS: dict[str, tuple[str, ...]] = {
     "profile_education_dates": (
         ".pv-entity__dates span:not(.visually-hidden)",
     ),
+    # --- Legacy post search DOM walk -------------------------------------
+    # `linkedin_browser_mcp.py` still walks the DOM with these. The scrape
+    # package uses the `post_result_*` group below instead.
     "search_posts_author_links": (
         'a[href*="linkedin.com/in/"]',
     ),
@@ -261,6 +388,87 @@ SELECTORS: dict[str, tuple[str, ...]] = {
         "main#workspace",
         "main",
     ),
+    # --- Post search results (rebuilt, SCRAPE-01) -------------------------
+    "post_result_item": (
+        "div[data-chameleon-result-urn]",
+        '[data-urn*="urn:li:activity"]',
+        '[data-id*="urn:li:activity"]',
+        "div.feed-shared-update-v2",
+        ".occludable-update",
+    ),
+    "post_result_permalink": (
+        'a[href*="/feed/update/"]',
+        'a[href*="/posts/"]',
+    ),
+    "post_result_author_link": (
+        ".update-components-actor__meta-link",
+        ".update-components-actor__container-link",
+        'a[href*="/in/"]',
+    ),
+    "post_result_author_name": (
+        '.update-components-actor__title span[aria-hidden="true"]',
+        '.update-components-actor__name span[aria-hidden="true"]',
+        ".update-components-actor__title",
+        ".update-components-actor__name",
+    ),
+    "post_result_author_headline": (
+        '.update-components-actor__description span[aria-hidden="true"]',
+        ".update-components-actor__description",
+    ),
+    "post_result_content": (
+        '.update-components-text span[dir="ltr"]',
+        ".feed-shared-inline-show-more-text",
+        ".update-components-text",
+        ".feed-shared-text",
+    ),
+    "post_result_timestamp": (
+        '.update-components-actor__sub-description span[aria-hidden="true"]',
+        ".update-components-actor__sub-description",
+        "time",
+    ),
+    "post_result_reactions": (
+        'span[data-test-id="social-actions__reaction-count"]',
+        ".social-details-social-counts__reactions-count",
+        'button[aria-label*="reaction"]',
+    ),
+    "post_result_comments": (
+        "li.social-details-social-counts__comments button",
+        ".social-details-social-counts__comments",
+        'button[aria-label*="comment"]',
+    ),
+    "post_result_reposts": (
+        'button[aria-label*="repost"]',
+        ".social-details-social-counts__item--right-aligned",
+    ),
+    # --- Group member lists (new, SCRAPE-01) ------------------------------
+    "group_members_container": (
+        "div.groups-members-list",
+        "section.groups-members",
+        'ul[role="list"]',
+    ),
+    "group_member_item": (
+        "li.groups-members-list__member",
+        'li:has(a[href*="/in/"])',
+        "li.artdeco-list__item",
+    ),
+    "group_member_profile_link": (
+        'a[href*="/in/"]',
+        ".app-aware-link",
+    ),
+    "group_member_name": (
+        'a[href*="/in/"] span[aria-hidden="true"]',
+        ".artdeco-entity-lockup__title",
+        ".groups-members-list__member-name",
+    ),
+    "group_member_headline": (
+        ".artdeco-entity-lockup__subtitle",
+        ".groups-members-list__member-headline",
+    ),
+    "group_member_load_more": (
+        "button.scaffold-finite-scroll__load-button",
+        'button:has-text("Show more results")',
+    ),
+    # --- Generic ----------------------------------------------------------
     "generic_button": (
         "button",
     ),
