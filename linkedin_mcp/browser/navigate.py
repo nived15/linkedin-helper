@@ -30,6 +30,7 @@ __all__ = [
     "NavigationError",
     "NavigationResult",
     "SessionExpiredError",
+    "assert_session_alive",
     "goto_profile",
     "profile_slug",
     "slug_to_query",
@@ -192,6 +193,41 @@ async def _ensure_linkedin_context(
     await _assert_authenticated(page, account_id)
 
 
+async def assert_session_alive(
+    page: Any,
+    *,
+    account_id: int | None = None,
+    action_type: str | None = None,
+) -> None:
+    """Halt when LinkedIn served an interstitial instead of the page we asked for.
+
+    This is the one call any navigation path makes after a fetch, and it does the
+    whole job: it inspects the page, flips the account to `challenged` or
+    `logged_out`, writes the `safety_events` row, and raises. There is no
+    connection to thread through and no state machine for the caller to drive, so
+    delegating to it costs one line. That is on purpose. A detection check cheap
+    enough to copy is a check that gets copied, and a copy raises without
+    recording anything, which leaves the account looking healthy to the gate
+    while LinkedIn has already stopped it.
+
+    `SessionExpiredError` stays the error navigation callers catch. The typed
+    `DetectionHalt` rides along on `halt`, so a caller that wants the marker, the
+    source and the raw evidence reads them off the detection.
+
+    Args:
+        page: Anything exposing `url`, and optionally `frames`, `query_selector`,
+            `content` and `title`.
+        account_id: Account the navigation ran as. The halt is only recorded when
+            this is supplied.
+        action_type: Action the navigation was part of. When given, the halt also
+            appends a refused row to `actions_log`.
+    """
+    try:
+        await assert_page_clear(page, account_id=account_id, action_type=action_type)
+    except DetectionHalt as halt:
+        raise SessionExpiredError(f"Session expired: {halt}", halt=halt) from halt
+
+
 async def _assert_authenticated(page: Any, account_id: int | None = None) -> None:
     """Halt when LinkedIn served an interstitial instead of the page we asked for.
 
@@ -199,10 +235,7 @@ async def _assert_authenticated(page: Any, account_id: int | None = None) -> Non
     change and the `safety_events` row all live in `linkedin_mcp.safety.detect`,
     so a marker is added in one place and every navigation picks it up.
     """
-    try:
-        await assert_page_clear(page, account_id=account_id)
-    except DetectionHalt as halt:
-        raise SessionExpiredError(f"Session expired: {halt}", halt=halt) from halt
+    await assert_session_alive(page, account_id=account_id)
 
 
 async def _open_search_bar(page: Any, pacer: Humanizer, timeout: int) -> Any:

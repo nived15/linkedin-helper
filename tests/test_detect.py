@@ -2,10 +2,12 @@ import json
 import re
 import sqlite3
 from datetime import datetime, timezone
+from inspect import Parameter, signature
 from pathlib import Path
 
 import pytest
 
+from linkedin_mcp import browser
 from linkedin_mcp.audit import instrument
 from linkedin_mcp.audit.log import (
     AuditLog,
@@ -15,7 +17,11 @@ from linkedin_mcp.audit.log import (
     set_audit_log,
 )
 from linkedin_mcp.browser.humanize import FAST, Humanizer
-from linkedin_mcp.browser.navigate import SessionExpiredError, goto_profile
+from linkedin_mcp.browser.navigate import (
+    SessionExpiredError,
+    assert_session_alive,
+    goto_profile,
+)
 from linkedin_mcp.safety import detect
 from linkedin_mcp.safety.detect import (
     CAPTCHA_SELECTOR,
@@ -575,7 +581,62 @@ async def test_a_halt_without_an_account_still_stops_the_run(audit, account_id):
     assert safety_events(audit, account_id) == []
 
 
-# --- the read side MCP-01 will call ------------------------------------------
+# --- the delegation contract other navigation paths depend on ----------------
+
+
+@pytest.mark.asyncio
+async def test_one_call_with_a_page_and_an_account_does_the_whole_job(
+    audit, account_id
+):
+    """The delegation target has to be cheap or it will be copied instead.
+
+    `scrape/paginate.py` walks up to 100 pages per run, which makes it the
+    highest volume navigation path in the codebase. If checking a page there
+    meant threading a connection through the pagination loop, it would keep its
+    own substring check, and a copy raises without recording anything. So this
+    pins the contract: a page, an account id, and everything else is handled.
+    """
+    page = UrlOnlyPage(FEED_URL)
+    page.url = "https://www.linkedin.com/authwall?trk=x"
+
+    with pytest.raises(SessionExpiredError, match="Session expired") as expired:
+        await assert_session_alive(
+            page, account_id=account_id, action_type="profile_search"
+        )
+
+    assert account_state(audit, account_id) == "challenged"
+    assert safety_events(audit, account_id)[0]["kind"] == "challenge_detected"
+    assert open_challenges(audit.connection)[0]["account_id"] == account_id
+    assert isinstance(expired.value.halt, ChallengeDetected)
+    assert expired.value.detection.signal.marker == "/authwall"
+
+    # The gate now refuses on its own, which is the point of writing the state.
+    with pytest.raises(AccountChallenged):
+        SafetyGate(clock=lambda: NOON).acquire(account_id, "profile_search")
+
+
+@pytest.mark.asyncio
+async def test_the_delegation_target_takes_no_connection_and_no_gate(audit, account_id):
+    """A caller only has to know the page and the account.
+
+    Anything else in the signature has to be optional, or a call site with just
+    those two things in scope cannot delegate.
+    """
+    required = [
+        name
+        for name, parameter in signature(assert_session_alive).parameters.items()
+        if parameter.default is Parameter.empty
+    ]
+
+    assert required == ["page"]
+    with pytest.raises(SessionExpiredError):
+        await assert_session_alive(UrlOnlyPage(AUTHWALL_URL), account_id=account_id)
+    assert account_state(audit, account_id) == "challenged"
+
+
+def test_the_detection_helper_is_reachable_from_the_browser_package():
+    assert browser.assert_session_alive is assert_session_alive
+    assert "assert_session_alive" in browser.__all__
 
 
 @pytest.mark.asyncio
