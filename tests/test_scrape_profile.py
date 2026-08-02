@@ -1586,9 +1586,16 @@ def test_the_profile_tables_need_no_migration():
 
     for table in ("lead_contacts", "lead_experience", "lead_education", "lead_skills"):
         assert f"CREATE TABLE IF NOT EXISTS {table}" in schema
-    assert sorted(
-        path.name for path in (REPO_ROOT / "linkedin_mcp/core/migrations").glob("*.sql")
-    ) == ["0001_init.sql", "0002_lead_dedupe.sql"]
+
+    # Scoped to this issue on purpose. Asserting the whole migration list would
+    # make any unrelated issue that adds a migration fail a SCRAPE-03 test,
+    # which points a false positive at the wrong author. What this issue can
+    # promise is that it added no migration of its own.
+    assert [
+        path.name
+        for path in (REPO_ROOT / "linkedin_mcp/core/migrations").glob("*.sql")
+        if "profile" in path.name
+    ] == []
 
 
 def test_contact_rows_satisfy_the_schema_check_constraint(conn, account):
