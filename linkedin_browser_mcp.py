@@ -10,6 +10,7 @@ from linkedin_mcp.audit import audit_linkedin_action, record_tool_result
 from linkedin_mcp.browser.humanize import pace
 from linkedin_mcp.browser.session import BrowserSession, load_cookies, save_cookies
 from linkedin_mcp.core.config import ADHOC_ENQUEUE_ACTION, profile_view_action
+from linkedin_mcp.drafts import register_draft_tools
 from linkedin_mcp.executors.contract import DETAIL_SHAPE, SUMMARY_SHAPE
 from linkedin_mcp.executors.support import fill_selector_fallback
 from linkedin_mcp.safety import guard_action
@@ -19,6 +20,7 @@ from linkedin_mcp.tools import (
     register_lead_tools,
     validated_payload,
 )
+from linkedin_mcp.tools.campaigns import register_campaign_tools
 
 # Set up logging to stderr only
 logging.basicConfig(
@@ -53,6 +55,17 @@ register_lead_tools(mcp)
 # make LinkedIn do is a `jobs` row, and the worker in worker.py is the only
 # thing that acts on one.
 register_action_tools(mcp)
+
+# MCP-01 (#24) registers the twelve campaign control tools, and SEQ-05 (#23)
+# registers the three draft review tools. Both packages ship a register_*_tools
+# factory and neither was ever called here, so their tools were built, tested
+# and merged while remaining invisible to every real MCP client. A factory that
+# nobody calls is dead code that passes its own tests: each suite registers
+# against a FastMCP instance it creates itself, which is green whether or not
+# this module ever does the same. test_tool_registration.py now asserts every
+# factory in linkedin_mcp/ is reachable from this file so it cannot recur.
+register_campaign_tools(mcp)
+register_draft_tools(mcp)
 
 def report_progress(ctx, current, total, message=None):
     """Helper function to report progress with proper validation"""
