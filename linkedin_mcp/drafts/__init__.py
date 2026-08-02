@@ -85,6 +85,7 @@ from linkedin_mcp.drafts.fragments import (
     fragment_source,
     pending_fragments,
 )
+from linkedin_mcp.drafts.parker import draft_parker, make_draft_parker
 from linkedin_mcp.drafts.routing import (
     ICP_ACTION,
     ICP_FILTER_NAME,
@@ -199,6 +200,7 @@ __all__ = [
     "defer_for_approval",
     "draft_context",
     "draft_from_row",
+    "draft_parker",
     "encode_verdict",
     "ensure_draft",
     "ensure_fragment_drafts",
@@ -212,6 +214,7 @@ __all__ = [
     "lead_summary",
     "list_drafts",
     "list_pending",
+    "make_draft_parker",
     "mark_sent",
     "open_draft_for",
     "park_draft",
