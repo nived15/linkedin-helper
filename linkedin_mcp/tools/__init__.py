@@ -43,6 +43,16 @@ from linkedin_mcp.tools.contract import (
 from linkedin_mcp.tools.crm import EXPORT_COLUMNS, register_crm_tools
 from linkedin_mcp.tools.harvest import MAX_HARVEST_LIMIT, register_harvest_tools
 
+# MCP-01 (#24): the campaign control surface. Kept as one contiguous block so a
+# parallel change to this module lands somewhere else in the file entirely.
+from linkedin_mcp.tools.campaigns import (
+    CAMPAIGN_ACTION_TYPES,
+    CAMPAIGN_TOOLS,
+    CampaignErrorReason,
+    CampaignToolError,
+    register_campaign_tools,
+)
+
 __all__ = [
     "CSV_IMPORT_ACTION",
     "EXPORT_COLUMNS",
@@ -66,6 +76,12 @@ __all__ = [
     "register_crm_tools",
     "register_harvest_tools",
     "register_lead_tools",
+    # MCP-01 (#24)
+    "CAMPAIGN_ACTION_TYPES",
+    "CAMPAIGN_TOOLS",
+    "CampaignErrorReason",
+    "CampaignToolError",
+    "register_campaign_tools",
 ]
 
 

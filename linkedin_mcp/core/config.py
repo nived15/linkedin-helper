@@ -163,6 +163,23 @@ UNMETERED_ACTIONS: frozenset[str] = (
             "lead_read",
             "lead_export",
             CONNECTION_ACCEPTED_ACTION,
+            # MCP-01 (#24): the twelve campaign control tools. Every one of them
+            # writes a definition row or flips a status column in the local
+            # database, so metering them would spend the account's LinkedIn
+            # budget on work LinkedIn never sees. `campaign_start` in particular
+            # runs nothing: it sets `campaigns.status` and the worker notices.
+            "campaign_create",
+            "campaign_add_step",
+            "campaign_set_template",
+            "campaign_set_icp",
+            "campaign_preview",
+            "campaign_approve",
+            "campaign_start",
+            "campaign_pause",
+            "campaign_resume",
+            "campaign_archive",
+            "campaign_status",
+            "campaign_add_leads",
         }
     )
     | DRAFT_ACTIONS
