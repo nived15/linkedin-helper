@@ -176,7 +176,12 @@ class PageRun(Generic[T]):
     gate_refusal: Mapping[str, Any] | None = None
 
 
-async def assert_session_alive(page: Any, *, account_id: int | None = None) -> None:
+async def assert_session_alive(
+    page: Any,
+    *,
+    account_id: int | None = None,
+    action_type: str | None = None,
+) -> None:
     """Raise when LinkedIn has bounced the session to a wall or a challenge.
 
     This propagates on purpose. A run that quietly returns zero results because
@@ -193,8 +198,16 @@ async def assert_session_alive(page: Any, *, account_id: int | None = None) -> N
     `account_id` is optional so a caller without one still gets the check. The
     halt is only written down when an id is supplied, because recording a
     challenge against the wrong account would stop a session nobody challenged.
+
+    `action_type` is passed through rather than hardcoded. The paged loop runs
+    both people search and post search, so a fixed value would file every
+    post-search halt under the wrong budget on the timeline.
     """
-    await navigate_assert_session_alive(page, account_id=account_id)
+    await navigate_assert_session_alive(
+        page,
+        account_id=account_id,
+        action_type=action_type,
+    )
 
 
 async def paginate(
@@ -285,7 +298,11 @@ async def paginate(
 
         await fetch(page, page_number)
         await pacer.settle()
-        await assert_session_alive(page, account_id=account_id)
+        await assert_session_alive(
+            page,
+            account_id=account_id,
+            action_type=action_type,
+        )
         pages_fetched += 1
 
         write(

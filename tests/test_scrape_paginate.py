@@ -368,6 +368,56 @@ def test_a_challenge_mid_pagination_stops_the_account_and_not_just_the_run(tmp_p
         log.close()
 
 
+def test_the_halt_is_filed_under_the_search_that_was_actually_running(tmp_path):
+    """A post search that gets challenged must not be filed as a profile search.
+
+    The paged loop serves both people search and post search. Hardcoding one
+    action type in the delegation reads as harmless, because the account still
+    flips and the run still stops. The damage shows up later, when the timeline
+    is used to work out which budget tripped a checkpoint and every post-search
+    halt is sitting under the wrong one.
+    """
+    log = AuditLog.open(tmp_path / "linkedin-helper.db")
+    set_audit_log(log)
+    reset_gate()
+    try:
+        account_id = log.ensure_account("posts@example.com")
+        surface = Surface()
+        page = FakePage()
+
+        async def fetch(target, page_number):
+            if page_number >= 2:
+                target.url = "https://www.linkedin.com/checkpoint/challenge/AgH7Xm"
+            await surface.fetch(target, page_number)
+
+        with pytest.raises(SessionExpiredError):
+            run(
+                paginate(
+                    page,
+                    action_type="post_search",
+                    account_id=account_id,
+                    fetch=fetch,
+                    extract=surface.extract,
+                    key=lambda item: item,
+                    limit=100,
+                    humanizer=pacer(),
+                    guard=FakeGate(),
+                    record=FakeRecorder(),
+                )
+            )
+
+        refusals = log.connection.execute(
+            "SELECT action_type, outcome FROM actions_log WHERE account_id = ?",
+            (account_id,),
+        ).fetchall()
+        assert ("post_search", "refused") in [tuple(row) for row in refusals]
+        assert "profile_search" not in {row[0] for row in refusals}
+    finally:
+        reset_audit_log()
+        reset_gate()
+        log.close()
+
+
 def test_the_paged_loop_keeps_no_challenge_markers_of_its_own():
     """One list of markers, in `detect`. A second copy drifts out of date.
 
