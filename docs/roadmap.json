@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updatedAt": "2026-08-02T18:48:41.450Z",
+  "updatedAt": "2026-08-02T19:48:16.280Z",
   "tasks": {
     "CORE-01": {
       "status": "done",
@@ -154,9 +154,11 @@
       "prMerged": true
     },
     "MCP-05": {
-      "status": "pending",
+      "status": "done",
       "notes": "",
-      "issueNumber": 28
+      "issueNumber": 28,
+      "prNumber": 53,
+      "prMerged": true
     }
   },
   "constraints": {
