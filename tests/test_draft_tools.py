@@ -25,9 +25,14 @@ from linkedin_mcp.drafts import (
     STATUS_PENDING_APPROVAL,
     STATUS_REJECTED,
     approved_text,
+    ensure_draft,
+    icp_gate_step,
+    park_draft,
     register_draft_tools,
     request_draft,
+    require_draft,
     reset_draft_connection,
+    route_icp_verdict,
     set_draft_connection,
 )
 from linkedin_mcp.drafts.errors import DraftNotApprovedError
@@ -37,7 +42,14 @@ from linkedin_mcp.safety.limits import (
     metered_universe,
     observed_action_types,
 )
-from linkedin_mcp.sequences import StepSpec, create_campaign, define_steps, enrol_lead
+from linkedin_mcp.sequences import (
+    StepSpec,
+    claim_step,
+    create_campaign,
+    define_steps,
+    enrol_lead,
+    list_jobs,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 TOOLS_MODULE = REPO_ROOT / "linkedin_mcp" / "drafts" / "tools.py"
@@ -344,12 +356,18 @@ async def test_a_full_icp_qualification_spends_no_linkedin_budget(
 ):
     """Requirement asserted end to end, through the real tool call path.
 
+    Park, list, submit, approve and route a lead all the way out of the campaign.
     Every row the tools wrote is audited, and not one of them counts against the
     account's daily or hourly ceilings. That is what makes running the gate
     before the invite step affordable.
     """
-    enrol_lead(conn, campaign.id, lead, now=BASE_TIME)
-    parked = request_draft(conn, campaign.id, lead, "icp_evaluation")
+    gated = create_campaign(conn, account, "Gated", status="active", approval_mode="auto")
+    define_steps(
+        conn, gated.id, [icp_gate_step({"who": "platform leads"}), StepSpec("connection_request")]
+    )
+    enrol_lead(conn, gated.id, lead, now=BASE_TIME)
+    claim_step(conn, gated.id, lead, worker_id="w1", now=BASE_TIME)
+    parked = ensure_draft(conn, gated.id, lead, "icp_evaluation").draft
     verdict = {"match": False, "score": 0.12, "reason": "No tooling remit."}
 
     async with Client(server) as client:
@@ -357,14 +375,77 @@ async def test_a_full_icp_qualification_spends_no_linkedin_budget(
         await client.call_tool("drafts_submit", {"draft_id": parked.id, "verdict": verdict})
         await client.call_tool("drafts_approve", {"draft_id": parked.id})
 
+    routing = route_icp_verdict(conn, parked.id, worker_id="w1")
     observed = observed_action_types(conn, account)
     universe = metered_universe(None, observed)
 
+    assert routing.sublist == "failed"
     assert observed == set(DRAFT_ACTION_TYPES)
     assert universe.isdisjoint(observed)
-    assert (
-        global_actions_in_window(account, window=DAY, action_types=universe) == 0
+    assert global_actions_in_window(account, window=DAY, action_types=universe) == 0
+    # The lead left the campaign without a single invitation being spent.
+    assert not [
+        job for job in list_jobs(conn, campaign_id=gated.id) if job.state == "pending"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_draft_cannot_be_touched_through_the_tools_by_another_account(
+    server, conn, account, tmp_path
+):
+    """Reading is account-scoped, so writing has to be too."""
+    intruder = int(
+        conn.execute(
+            "INSERT INTO accounts (label, timezone, state) VALUES ('other', 'UTC', 'active')"
+        ).lastrowid
     )
+    conn.commit()
+    theirs = park_draft(conn, account_id=intruder, kind="comment")
+
+    async with Client(server) as client:
+        listed = payload(await client.call_tool("drafts_list_pending", {}))
+        submitted = payload(
+            await client.call_tool("drafts_submit", {"draft_id": theirs.id, "text": GOOD_NOTE})
+        )
+        approved = payload(await client.call_tool("drafts_approve", {"draft_id": theirs.id}))
+
+    assert listed["drafts"] == []
+    assert submitted["reason"] == "DraftOwnershipError"
+    assert approved["reason"] == "DraftOwnershipError"
+    assert require_draft(conn, theirs.id).status == STATUS_NEEDS_GENERATION
+
+
+@pytest.mark.asyncio
+async def test_text_in_the_review_queue_cannot_be_swapped_through_the_tool(
+    server, conn, account, campaign, lead
+):
+    """The reviewer approves what they read, because nothing else can get in."""
+    enrol_lead(conn, campaign.id, lead, now=BASE_TIME)
+    parked = request_draft(conn, campaign.id, lead, "connection_note")
+
+    async with Client(server) as client:
+        await client.call_tool("drafts_submit", {"draft_id": parked.id, "text": GOOD_NOTE})
+        reviewed = payload(
+            await client.call_tool(
+                "drafts_list_pending", {"status": STATUS_PENDING_APPROVAL}
+            )
+        )["drafts"][0]["generated_text"]
+
+        swap = payload(
+            await client.call_tool(
+                "drafts_submit",
+                {"draft_id": parked.id, "text": "Rewritten after the human looked away."},
+            )
+        )
+        released = payload(
+            await client.call_tool(
+                "drafts_approve", {"draft_id": parked.id, "reviewed_text": reviewed}
+            )
+        )
+
+    assert swap["reason"] == "DraftStateError"
+    assert released["draft"]["status"] == STATUS_APPROVED
+    assert approved_text(conn, parked.id) == GOOD_NOTE == reviewed
 
 
 @pytest.mark.asyncio
@@ -436,12 +517,51 @@ def test_the_tools_module_does_not_touch_the_mcp_entry_point():
     )
 
 
-def test_the_connection_resolver_is_replaceable(audit, tmp_path):
-    """So a test, or MCP-03, can point the tools at a different database."""
+@pytest.mark.asyncio
+async def test_the_connection_resolver_is_replaceable(audit, account, tmp_path):
+    """So a test, or MCP-03, can point the tools at a different database.
+
+    Proven by actually calling a tool and finding the other database's row, not
+    by observing that registration returned three names.
+    """
     other = AuditLog.open(tmp_path / "other.db")
     try:
+        other_account = other.ensure_account("someone-else@example.com")
+        elsewhere = park_draft(other.connection, account_id=other_account, kind="comment")
+
         mcp = FastMCP("injected")
-        registered = register_draft_tools(mcp, connection_factory=lambda: other.connection)
-        assert set(registered) == set(TOOL_NAMES)
+        register_draft_tools(
+            mcp,
+            connection_factory=lambda: other.connection,
+            account_resolver=lambda: other_account,
+        )
+
+        async with Client(mcp) as client:
+            listed = payload(await client.call_tool("drafts_list_pending", {}))
+            submitted = payload(
+                await client.call_tool(
+                    "drafts_submit", {"draft_id": elsewhere.id, "text": GOOD_NOTE}
+                )
+            )
+
+        assert [draft["id"] for draft in listed["drafts"]] == [elsewhere.id]
+        assert submitted["draft"]["status"] == STATUS_PENDING_APPROVAL
+        # The write landed in the injected database, not the default one.
+        assert (
+            other.connection.execute(
+                "SELECT generated_text FROM ai_drafts WHERE id = ?", (elsewhere.id,)
+            ).fetchone()["generated_text"]
+            == GOOD_NOTE
+        )
+        # Known limitation, worth stating out loud: `audit_linkedin_action` uses
+        # the process-wide audit log, so an injected connection splits the draft
+        # rows from their audit rows. Fine for a test harness, and MCP-03 should
+        # point both at one database.
+        assert (
+            audit.connection.execute(
+                "SELECT COUNT(*) AS n FROM actions_log"
+            ).fetchone()["n"]
+            > 0
+        )
     finally:
         other.close()

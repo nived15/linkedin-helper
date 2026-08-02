@@ -71,6 +71,7 @@ from linkedin_mcp.sequences.steps import (
     Step,
     StepSpec,
 )
+from linkedin_mcp.sequences.transaction import transaction
 from linkedin_mcp.sequences.transitions import (
     complete_step,
     current_step,
@@ -90,6 +91,7 @@ __all__ = [
     "ensure_draft",
     "ensure_fragment_drafts",
     "icp_gate_step",
+    "is_icp_gate",
     "latest_verdict",
     "register_icp_filter",
     "request_draft",
@@ -217,28 +219,34 @@ def ensure_draft(
     week must not leave seven rows in the review queue, so an open draft for the
     same lead, step and kind is reused. `sent` and `rejected` rows are history and
     do not block a fresh one, which is how a rejected draft gets regenerated.
+
+    The lookup and the insert are one transaction, so two workers ticking the
+    same lead at once cannot both decide there is nothing parked yet.
     """
-    resolved_step = step if step is not None else current_step(conn, campaign_id, lead_id)
-    step_id = None if resolved_step is None else resolved_step.id
+    with transaction(conn):
+        resolved_step = (
+            step if step is not None else current_step(conn, campaign_id, lead_id)
+        )
+        step_id = None if resolved_step is None else resolved_step.id
 
-    existing = open_draft_for(
-        conn, campaign_id, lead_id, kind, step_id=step_id, fragment=fragment
-    )
-    if existing is not None:
-        return DraftGate(draft=existing, parked=False)
+        existing = open_draft_for(
+            conn, campaign_id, lead_id, kind, step_id=step_id, fragment=fragment
+        )
+        if existing is not None:
+            return DraftGate(draft=existing, parked=False)
 
-    draft = request_draft(
-        conn,
-        campaign_id,
-        lead_id,
-        kind,
-        step=resolved_step,
-        fragment=fragment,
-        extras=extras,
-        model=model,
-        now=now,
-    )
-    return DraftGate(draft=draft, parked=True)
+        draft = request_draft(
+            conn,
+            campaign_id,
+            lead_id,
+            kind,
+            step=resolved_step,
+            fragment=fragment,
+            extras=extras,
+            model=model,
+            now=now,
+        )
+        return DraftGate(draft=draft, parked=True)
 
 
 def ensure_fragment_drafts(
@@ -376,40 +384,96 @@ def route_icp_verdict(
 
     verdict = parse_verdict(draft.verdict, draft_id=draft_id)
 
-    if verdict.match:
-        record = complete_step(
-            conn,
-            draft.campaign_id,
-            draft.lead_id,
-            now=now,
-            outcome=f"{ICP_MATCH_OUTCOME}: score={verdict.score}",
-            worker_id=worker_id,
-        )
-    else:
-        record = fail_step(
-            conn,
-            draft.campaign_id,
-            draft.lead_id,
-            error=f"{ICP_NO_MATCH_OUTCOME}: {verdict.reason}",
-            now=now,
-            worker_id=worker_id,
-        )
+    # One transaction covering the sub-list move and the draft's own status.
+    # Splitting them would let a crash in between leave the lead routed and the
+    # verdict still reusable, which is a second route waiting to happen.
+    with transaction(conn):
+        standing = current_step(conn, draft.campaign_id, draft.lead_id)
+        _require_matching_gate(draft, standing)
 
-    mark_sent(conn, draft_id, now=now)
+        if verdict.match:
+            record = complete_step(
+                conn,
+                draft.campaign_id,
+                draft.lead_id,
+                now=now,
+                outcome=f"{ICP_MATCH_OUTCOME}: score={verdict.score}",
+                worker_id=worker_id,
+            )
+        else:
+            record = fail_step(
+                conn,
+                draft.campaign_id,
+                draft.lead_id,
+                error=f"{ICP_NO_MATCH_OUTCOME}: {verdict.reason}",
+                now=now,
+                worker_id=worker_id,
+            )
+
+        mark_sent(conn, draft_id, now=now)
+
     return IcpRouting(draft=require_draft(conn, draft_id), verdict=verdict, record=record)
+
+
+def is_icp_gate(step: Step | None) -> bool:
+    """True when this step is an ICP qualification gate.
+
+    A verdict may only resolve a filter step. That is the property that matters:
+    a filter reaches nothing on LinkedIn, so resolving one can never be the same
+    mistake as resolving an invite or a message with somebody's ICP score.
+    """
+    if step is None or not step.is_filter:
+        return False
+    return step.filter_name == ICP_FILTER_NAME or ICP_CONFIG_KEY in step.config
+
+
+def _require_matching_gate(draft: Draft, standing: Step | None) -> None:
+    """Refuse to resolve any step other than the gate this verdict evaluated."""
+    if draft.step_id is None:
+        raise DraftStateError(
+            draft.id,
+            draft.status,
+            "routed; it was parked without a step, so there is nothing it can resolve",
+        )
+    if standing is None or standing.id != draft.step_id:
+        # The lead has moved on since this verdict was parked. Completing or
+        # failing whatever it is standing on now would resolve a step this
+        # verdict never evaluated.
+        raise DraftStateError(
+            draft.id,
+            draft.status,
+            f"routed; it was parked for step {draft.step_id} and the lead is "
+            f"now on {None if standing is None else standing.id}",
+        )
+    if not is_icp_gate(standing):
+        raise DraftStateError(
+            draft.id,
+            draft.status,
+            f"routed; step {standing.id} is a {standing.action_type!r} step, "
+            "not an ICP gate",
+        )
 
 
 def latest_verdict(
     conn: sqlite3.Connection,
     campaign_id: int,
     lead_id: int,
+    *,
+    step_id: int | None = None,
 ) -> Verdict | None:
     """Return the most recent released ICP verdict for a lead, or None.
 
     Only `approved` and `sent` rows count. A verdict still sitting in
     `pending_approval` has not been released and must not decide anything.
+
+    The newest released row is the answer, full stop. If it is missing its
+    verdict or the verdict is malformed this raises instead of quietly falling
+    back to an older one, because "the client regressed" and "the client said no"
+    are not the same fact and a campaign with two gates must not answer the
+    second with the first one's verdict. `step_id` narrows to a single gate for
+    exactly that reason.
     """
-    drafts = list_drafts(
+    candidates = list_drafts(
         conn,
         status=(STATUS_APPROVED, STATUS_SENT),
         kind="icp_evaluation",
@@ -417,9 +481,10 @@ def latest_verdict(
         lead_id=lead_id,
         limit=None,
     )
-    for draft in reversed(drafts):
-        if draft.verdict:
-            return parse_verdict(draft.verdict, draft_id=draft.id)
+    for draft in reversed(candidates):
+        if step_id is not None and draft.step_id != step_id:
+            continue
+        return parse_verdict(draft.verdict, draft_id=draft.id)
     return None
 
 
@@ -432,14 +497,22 @@ def _icp_predicate(context: FilterContext) -> bool:
     the client already submitted. It never calls a model, which is what keeps a
     filter step honest about being local and free.
 
-    With no released verdict it raises, because returning False would silently
-    drop every lead whose draft was merely still waiting for a human.
+    The verdict is looked up for *this* step, so a campaign with two ICP gates
+    cannot answer the second one with the first one's verdict. With no released
+    verdict it raises, because returning False would silently drop every lead
+    whose draft was merely still waiting for a human.
     """
-    verdict = latest_verdict(context.conn, context.campaign_id, context.lead_id)
+    verdict = latest_verdict(
+        context.conn,
+        context.campaign_id,
+        context.lead_id,
+        step_id=context.step.id,
+    )
     if verdict is None:
         raise LookupError(
-            f"lead {context.lead_id} has no released ICP verdict in campaign "
-            f"{context.campaign_id}; park an icp_evaluation draft first"
+            f"lead {context.lead_id} has no released ICP verdict for step "
+            f"{context.step.id} of campaign {context.campaign_id}; park an "
+            "icp_evaluation draft first"
         )
     threshold = context.config.get("min_score")
     if threshold is not None and verdict.score < float(threshold):

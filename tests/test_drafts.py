@@ -5,6 +5,7 @@ called, and one test disables sockets outright to prove that parking a draft
 reaches nothing.
 """
 
+import inspect
 import json
 import re
 import socket
@@ -25,7 +26,10 @@ from linkedin_mcp.drafts import (
     STATUS_SENT,
     TEXT_KINDS,
     VERDICT_KINDS,
+    DraftChangedError,
     DraftNotApprovedError,
+    DraftNotFoundError,
+    DraftOwnershipError,
     DraftStateError,
     DraftStyleError,
     UnknownDraftKindError,
@@ -609,14 +613,15 @@ def test_a_pending_fragment_makes_the_whole_render_refuse(conn, account, campaig
     """The strongest form of the safety rule: the renderer never sees the text."""
     enrol_lead(conn, campaign.id, lead, now=BASE_TIME)
     template = create_template(conn, account, "hybrid invite", HYBRID_BODY, kind="hybrid")
+    step = step_at_ord(conn, campaign.id, 1)
 
-    draft = request_draft(conn, campaign.id, lead, "message", fragment="opener")
+    draft = request_draft(conn, campaign.id, lead, "message", step=step, fragment="opener")
     submit_draft(conn, draft.id, text="Saw the platform rollout at Contoso.")
 
     result = safe_render_template(
         template,
         {"firstName": "Ada"},
-        fragments=fragment_source(conn, campaign.id, lead),
+        fragments=fragment_source(conn, campaign.id, lead, step_id=step.id),
     )
 
     assert result.ok is False
@@ -629,15 +634,16 @@ def test_a_pending_fragment_makes_the_whole_render_refuse(conn, account, campaig
 def test_an_approved_fragment_renders(conn, account, campaign, lead):
     enrol_lead(conn, campaign.id, lead, now=BASE_TIME)
     template = create_template(conn, account, "hybrid invite", HYBRID_BODY, kind="hybrid")
+    step = step_at_ord(conn, campaign.id, 1)
 
-    draft = request_draft(conn, campaign.id, lead, "message", fragment="opener")
+    draft = request_draft(conn, campaign.id, lead, "message", step=step, fragment="opener")
     submit_draft(conn, draft.id, text="Saw the platform rollout at Contoso.")
     approve_draft(conn, draft.id)
 
     result = safe_render_template(
         template,
         {"firstName": "Ada"},
-        fragments=fragment_source(conn, campaign.id, lead),
+        fragments=fragment_source(conn, campaign.id, lead, step_id=step.id),
     )
 
     assert result.ok is True
@@ -652,11 +658,14 @@ def test_revoking_an_approval_pulls_the_fragment_back_out_of_the_render(
 ):
     enrol_lead(conn, campaign.id, lead, now=BASE_TIME)
     template = create_template(conn, account, "hybrid invite", HYBRID_BODY, kind="hybrid")
-    draft = request_draft(conn, campaign.id, lead, "message", fragment="opener")
+    step = step_at_ord(conn, campaign.id, 1)
+    draft = request_draft(conn, campaign.id, lead, "message", step=step, fragment="opener")
     submit_draft(conn, draft.id, text="Saw the platform rollout at Contoso.")
     approve_draft(conn, draft.id)
     assert safe_render_template(
-        template, {"firstName": "Ada"}, fragments=fragment_source(conn, campaign.id, lead)
+        template,
+        {"firstName": "Ada"},
+        fragments=fragment_source(conn, campaign.id, lead, step_id=step.id),
     ).ok
 
     approve_draft(conn, draft.id, approved=False)
@@ -664,7 +673,7 @@ def test_revoking_an_approval_pulls_the_fragment_back_out_of_the_render(
     result = safe_render_template(
         template,
         {"firstName": "Ada"},
-        fragments=fragment_source(conn, campaign.id, lead),
+        fragments=fragment_source(conn, campaign.id, lead, step_id=step.id),
     )
     assert result.ok is False
     assert result.refusal.reason is RenderRefusalReason.MISSING_AI_FRAGMENT
@@ -725,6 +734,7 @@ def test_a_multi_fragment_message_renders_only_when_every_part_is_approved(
     )
     define_steps(conn, campaign.id, [StepSpec("message", template_id=template.id)])
     enrol_lead(conn, campaign.id, lead, now=BASE_TIME)
+    step = step_at_ord(conn, campaign.id, 1)
     gates = {
         gate.draft.context["fragment"]: gate.draft.id
         for gate in ensure_fragment_drafts(conn, campaign.id, lead)
@@ -735,14 +745,14 @@ def test_a_multi_fragment_message_renders_only_when_every_part_is_approved(
     approve_draft(conn, gates["opener"])
 
     half = safe_render_template(
-        template, {}, fragments=fragment_source(conn, campaign.id, lead)
+        template, {}, fragments=fragment_source(conn, campaign.id, lead, step_id=step.id)
     )
     assert half.ok is False
     assert half.refusal.reason is RenderRefusalReason.MISSING_AI_FRAGMENT
 
     approve_draft(conn, gates["closer"])
     whole = safe_render_template(
-        template, {}, fragments=fragment_source(conn, campaign.id, lead)
+        template, {}, fragments=fragment_source(conn, campaign.id, lead, step_id=step.id)
     )
     assert whole.ok is True
     assert whole.text == "Hi there. Saw the platform rollout at Contoso. Worth twenty minutes?"
@@ -788,8 +798,125 @@ def test_listing_filters_by_kind_and_campaign(conn, account, lead):
 
 def test_a_missing_draft_is_reported_not_guessed(conn):
     assert get_draft(conn, 999) is None
-    with pytest.raises(Exception):
+    with pytest.raises(DraftNotFoundError):
         require_draft(conn, 999)
+
+
+def test_a_draft_cannot_be_written_by_an_account_that_does_not_own_it(
+    conn, account, campaign, lead
+):
+    """Draft ids are small integers, so guessing one must not be enough."""
+    intruder = int(
+        conn.execute(
+            "INSERT INTO accounts (label, timezone, state) VALUES ('intruder', 'UTC', 'active')"
+        ).lastrowid
+    )
+    conn.commit()
+    enrol_lead(conn, campaign.id, lead, now=BASE_TIME)
+    draft = request_draft(conn, campaign.id, lead, "connection_note")
+
+    with pytest.raises(DraftOwnershipError):
+        submit_draft(conn, draft.id, text=GOOD_NOTE, account_id=intruder)
+
+    submit_draft(conn, draft.id, text=GOOD_NOTE, account_id=account)
+    with pytest.raises(DraftOwnershipError):
+        approve_draft(conn, draft.id, account_id=intruder)
+
+    assert require_draft(conn, draft.id).status == STATUS_PENDING_APPROVAL
+
+
+def test_text_in_the_review_queue_cannot_be_swapped_underneath_the_reviewer(
+    conn, campaign, lead
+):
+    """The window where a human reads A and approves B is closed by construction.
+
+    Submitting is legal only from `needs_generation`, so regenerating means
+    rejecting the draft, which is an audited decision, and parking a new one.
+    """
+    enrol_lead(conn, campaign.id, lead, now=BASE_TIME)
+    draft = request_draft(conn, campaign.id, lead, "connection_note")
+    submit_draft(conn, draft.id, text=GOOD_NOTE)
+
+    with pytest.raises(DraftStateError):
+        submit_draft(conn, draft.id, text="Rewritten after the human looked away.")
+
+    assert require_draft(conn, draft.id).generated_text == GOOD_NOTE
+    assert approve_draft(conn, draft.id).status == STATUS_APPROVED
+    assert approved_text(conn, draft.id) == GOOD_NOTE
+
+
+def test_approving_checks_the_text_that_was_read(conn, campaign, lead):
+    """Belt and braces against anything that edits the table from outside."""
+    enrol_lead(conn, campaign.id, lead, now=BASE_TIME)
+    draft = request_draft(conn, campaign.id, lead, "connection_note")
+    submit_draft(conn, draft.id, text=GOOD_NOTE)
+    reviewed = require_draft(conn, draft.id).generated_text
+
+    conn.execute(
+        "UPDATE ai_drafts SET generated_text = ? WHERE id = ?",
+        ("Something nobody reviewed.", draft.id),
+    )
+    conn.commit()
+
+    with pytest.raises(DraftChangedError):
+        approve_draft(conn, draft.id, expected_text=reviewed)
+
+    assert require_draft(conn, draft.id).status == STATUS_PENDING_APPROVAL
+
+
+def test_a_refused_submission_leaves_the_row_byte_identical(conn, campaign, lead):
+    enrol_lead(conn, campaign.id, lead, now=BASE_TIME)
+    draft = request_draft(conn, campaign.id, lead, "connection_note")
+    before = dict(conn.execute("SELECT * FROM ai_drafts WHERE id = ?", (draft.id,)).fetchone())
+
+    with pytest.raises(DraftStyleError):
+        submit_draft(conn, draft.id, text=EM_DASH_NOTE, model="a-worse-model")
+
+    after = dict(conn.execute("SELECT * FROM ai_drafts WHERE id = ?", (draft.id,)).fetchone())
+    assert after == before
+
+    submit_draft(conn, draft.id, text=GOOD_NOTE, model="claude-opus-5")
+    assert require_draft(conn, draft.id).status == STATUS_PENDING_APPROVAL
+
+
+def test_the_fragment_source_offers_no_way_to_inject_unapproved_text(conn, campaign, lead):
+    """No override argument, and no optional scope, because both are holes."""
+    signature = inspect.signature(fragment_source)
+
+    assert set(signature.parameters) == {"conn", "campaign_id", "lead_id", "step_id"}
+    assert signature.parameters["step_id"].default is inspect.Parameter.empty
+
+
+def test_an_approval_for_one_step_is_not_reused_by_another(conn, account, lead):
+    """Approving a message for step 2 must not silently fill step 4's fragment."""
+    campaign = create_campaign(conn, account, "Two messages", status="active")
+    template = create_template(conn, account, "hybrid", HYBRID_BODY, kind="hybrid")
+    define_steps(
+        conn,
+        campaign.id,
+        [
+            StepSpec("message", template_id=template.id),
+            StepSpec("message", template_id=template.id),
+        ],
+    )
+    enrol_lead(conn, campaign.id, lead, now=BASE_TIME)
+    first_step = step_at_ord(conn, campaign.id, 1)
+    second_step = step_at_ord(conn, campaign.id, 2)
+
+    gate = ensure_draft(conn, campaign.id, lead, "message", step=first_step, fragment="opener")
+    submit_draft(conn, gate.draft.id, text="Saw the platform rollout at Contoso.")
+    approve_draft(conn, gate.draft.id)
+
+    assert approved_fragments(conn, campaign.id, lead, step_id=first_step.id) != {}
+    assert approved_fragments(conn, campaign.id, lead, step_id=second_step.id) == {}
+
+    result = safe_render_template(
+        template,
+        {"firstName": "Ada"},
+        fragments=fragment_source(conn, campaign.id, lead, step_id=second_step.id),
+    )
+    assert result.ok is False
+    assert result.refusal.reason is RenderRefusalReason.MISSING_AI_FRAGMENT
 
 
 # --------------------------------------------------------------------------

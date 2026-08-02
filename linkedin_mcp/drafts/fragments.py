@@ -11,16 +11,20 @@ a draft that was never generated, and the render refuses. There is no code path
 in which unapproved generated text reaches a rendered message, because the
 render never sees it in the first place.
 
-The refusal is also the right kind of refusal:
-`RenderRefusal.is_awaiting_ai` is True for `MISSING_AI_FRAGMENT`, so a caller
-knows the lead is fine and the draft simply has not landed yet, and re-queues
-instead of discarding the lead.
+There is deliberately no override, no default and no "extra fragments" argument
+on this source. Any of those would be a way to put text into a message without
+approving it, which is the one thing this module exists to prevent. A caller that
+genuinely wants to render with hand-written fragments should pass its own
+mapping to SEQ-02 directly and own that decision in the open.
+
+The refusal is also the right kind of refusal: `RenderRefusal.is_awaiting_ai` is
+True for `MISSING_AI_FRAGMENT`, so a caller knows the lead is fine and the draft
+simply has not landed yet, and re-queues instead of discarding the lead.
 """
 
 from __future__ import annotations
 
 import sqlite3
-from collections.abc import Mapping
 
 from linkedin_mcp.drafts.store import STATUS_APPROVED, Draft, list_drafts
 from linkedin_mcp.templating.render import FragmentSource
@@ -41,6 +45,15 @@ def _fragment_key(draft: Draft) -> str | None:
     if not raw:
         return None
     return fragment_name(str(raw))
+
+
+def _wrong_step(draft: Draft, step_id: int | None) -> bool:
+    """True when this draft was not parked for the step being rendered.
+
+    Matched exactly. Treating a draft with no step as usable by every step would
+    let an approval given for one message be reused by another.
+    """
+    return step_id is not None and draft.step_id != step_id
 
 
 def approved_fragments(
@@ -65,7 +78,7 @@ def approved_fragments(
     ):
         if draft.kind not in _TEXT_KINDS or not draft.generated_text:
             continue
-        if step_id is not None and draft.step_id is not None and draft.step_id != step_id:
+        if _wrong_step(draft, step_id):
             continue
         name = _fragment_key(draft)
         if name:
@@ -95,7 +108,7 @@ def pending_fragments(
     ):
         if draft.kind not in _TEXT_KINDS or draft.status == STATUS_APPROVED:
             continue
-        if step_id is not None and draft.step_id is not None and draft.step_id != step_id:
+        if _wrong_step(draft, step_id):
             continue
         name = _fragment_key(draft)
         if name:
@@ -108,17 +121,19 @@ def fragment_source(
     campaign_id: int,
     lead_id: int,
     *,
-    step_id: int | None = None,
-    extra: Mapping[str, str] | None = None,
+    step_id: int,
 ) -> FragmentSource:
     """Return the callable to hand SEQ-02 as `fragments=`.
 
-    Approved drafts only. Anything else resolves to `None`, which is what makes
-    the render refuse rather than send unapproved text.
+    Approved drafts only, and only drafts approved for *this* step. Anything else
+    resolves to `None`, which is what makes the render refuse rather than send
+    unapproved text.
+
+    `step_id` is required rather than optional. An optional scope is a scope
+    somebody forgets to pass, and forgetting it here means an approval given for
+    one message quietly fills another message's fragment.
     """
     released = approved_fragments(conn, campaign_id, lead_id, step_id=step_id)
-    for key, value in (extra or {}).items():
-        released[fragment_name(str(key))] = value
 
     def lookup(name: str) -> str | None:
         return released.get(fragment_name(name))

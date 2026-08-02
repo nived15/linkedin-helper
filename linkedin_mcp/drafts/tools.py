@@ -173,6 +173,7 @@ def register_draft_tools(
                 text=text,
                 verdict=verdict,
                 model=model,
+                account_id=resolve_account(),
             )
         except DraftError as error:
             return _error(str(error), draft_id=draft_id, reason=type(error).__name__)
@@ -189,6 +190,7 @@ def register_draft_tools(
         draft_id: int,
         approved: bool = True,
         note: str | None = None,
+        reviewed_text: str | None = None,
         ctx: Context | None = None,
     ) -> dict:
         """Release a draft for use, or reject it.
@@ -200,6 +202,10 @@ def register_draft_tools(
 
         Pass `approved=False` to reject, which is also how an approval is revoked
         before anything is sent.
+
+        Pass `reviewed_text` with the exact text that was read. If the draft was
+        regenerated in between, the approval is refused rather than releasing text
+        nobody looked at.
         """
         conn = resolve_conn()
         try:
@@ -208,6 +214,8 @@ def register_draft_tools(
                 int(draft_id),
                 approved=bool(approved),
                 note=note,
+                expected_text=reviewed_text,
+                account_id=resolve_account(),
             )
         except DraftError as error:
             return _error(str(error), draft_id=draft_id, reason=type(error).__name__)

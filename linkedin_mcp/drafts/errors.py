@@ -15,9 +15,11 @@ from typing import Any
 
 
 __all__ = [
+    "DraftChangedError",
     "DraftError",
     "DraftNotApprovedError",
     "DraftNotFoundError",
+    "DraftOwnershipError",
     "DraftStateError",
     "DraftStyleError",
     "MalformedVerdictError",
@@ -108,4 +110,39 @@ class DraftNotApprovedError(DraftError):
         super().__init__(
             f"ai draft {draft_id} is {status!r}, not 'approved'; generated text "
             "may not be sent until a human approves it"
+        )
+
+
+class DraftOwnershipError(DraftError):
+    """A draft was addressed by an account that does not own it.
+
+    Draft ids are small sequential integers, so a caller that guessed one could
+    otherwise approve or rewrite another account's outreach. Reading is already
+    account-scoped by :func:`~linkedin_mcp.drafts.store.list_drafts`; this closes
+    the write path to match.
+    """
+
+    def __init__(self, draft_id: int, owner: int, caller: int) -> None:
+        self.draft_id = draft_id
+        self.owner = owner
+        self.caller = caller
+        super().__init__(
+            f"ai draft {draft_id} belongs to account {owner}, not {caller}"
+        )
+
+
+class DraftChangedError(DraftError):
+    """The text being approved is not the text that was reviewed.
+
+    Raised when `approve_draft` is given the text a human read and the row now
+    holds something else, which means a client resubmitted between the review and
+    the decision. Approving would then release text nobody looked at, so the
+    approval is refused and the reviewer is asked to look again.
+    """
+
+    def __init__(self, draft_id: int) -> None:
+        self.draft_id = draft_id
+        super().__init__(
+            f"ai draft {draft_id} was regenerated after it was reviewed; "
+            "read it again before approving"
         )

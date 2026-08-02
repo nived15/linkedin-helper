@@ -52,8 +52,10 @@ from datetime import datetime
 from typing import Any
 
 from linkedin_mcp.drafts.errors import (
+    DraftChangedError,
     DraftNotApprovedError,
     DraftNotFoundError,
+    DraftOwnershipError,
     DraftStateError,
     DraftStyleError,
     UnknownDraftKindError,
@@ -91,6 +93,7 @@ __all__ = [
     "open_draft_for",
     "park_draft",
     "require_draft",
+    "require_owner",
     "submit_draft",
     "validate_kind",
     "validate_text",
@@ -369,6 +372,20 @@ def require_draft(conn: sqlite3.Connection, draft_id: int) -> Draft:
     return draft
 
 
+def require_owner(draft: Draft, account_id: int | None) -> Draft:
+    """Refuse a write from an account that does not own this draft.
+
+    `account_id` of None means the caller is trusted local code, typically the
+    worker, which already resolved the draft from campaign state. The MCP tools
+    always pass the acting account, because a draft id is a small sequential
+    integer and guessing one must not be enough to approve somebody else's
+    outreach.
+    """
+    if account_id is not None and draft.account_id != account_id:
+        raise DraftOwnershipError(draft.id, draft.account_id, account_id)
+    return draft
+
+
 def list_drafts(
     conn: sqlite3.Connection,
     account_id: int | None = None,
@@ -490,14 +507,16 @@ def open_draft_for(
     return None
 
 
-_SUBMITTABLE: frozenset[str] = frozenset(
-    {STATUS_NEEDS_GENERATION, STATUS_PENDING_APPROVAL, STATUS_REJECTED}
-)
-"""Statuses a client may submit generated output onto.
+_SUBMITTABLE: frozenset[str] = frozenset({STATUS_NEEDS_GENERATION})
+"""The only status a client may submit generated output onto.
 
-`approved` and `sent` are absent on purpose. Letting a client overwrite text a
-human has already signed off would mean the approved thing and the sent thing
-are different things, which is the exact hole this package exists to close.
+Everything else is absent on purpose, and `pending_approval` is the interesting
+one. Letting a client overwrite text that is already sitting in the review queue
+opens a window in which a human reads A, a client writes B, and the human's
+approval releases B. Regeneration therefore means a *new row*: reject the old
+draft, which is an audited decision, and
+:func:`linkedin_mcp.drafts.routing.ensure_draft` parks a fresh one. `approved`
+and `sent` are excluded for the same reason, one step further along.
 """
 
 
@@ -510,6 +529,7 @@ def submit_draft(
     model: str | None = None,
     now: datetime | str | None = None,
     policy: StylePolicy = DEFAULT_STYLE,
+    account_id: int | None = None,
 ) -> Draft:
     """Store generated output against a parked draft.
 
@@ -517,47 +537,65 @@ def submit_draft(
     before anything is written, so a rejected submission leaves the row exactly
     as it was and the client can try again.
 
+    Legal only from `needs_generation`. A draft already in the review queue is
+    not overwritable, because that window is how a human could approve text they
+    never read. Regenerating means rejecting the old draft and parking a new one.
+
     The row lands in `pending_approval`, or in `approved` when the owning
     campaign's `approval_mode` is `auto`.
+
+    The read and the write are one transaction and the write is conditional on
+    the status the read saw, so two clients submitting the same draft at once
+    serialise instead of interleaving.
     """
-    draft = require_draft(conn, draft_id)
-    if draft.status not in _SUBMITTABLE:
-        raise DraftStateError(draft_id, draft.status, "submitted to")
-
-    generated_text: str | None = None
-    verdict_json: str | None = None
-
-    if draft.is_verdict_kind:
-        parsed = parse_verdict(verdict, draft_id=draft_id)
-        verdict_json = encode_verdict(parsed)
-        # A verdict may carry a human-readable summary too. It is never sent to
-        # LinkedIn, but it is held to the same style rules so an operator reading
-        # the review queue sees Nived's voice everywhere.
-        if text is not None and text.strip():
-            generated_text = validate_text(
-                "message", text, draft_id=draft_id, policy=policy
-            )
-    else:
-        if verdict is not None:
-            raise DraftStateError(draft_id, draft.status, "given a verdict; it is a text draft")
-        if text is None:
-            raise DraftStyleError(draft_id, ["no generated text was submitted"])
-        generated_text = validate_text(draft.kind, text, draft_id=draft_id, policy=policy)
-
-    status = (
-        STATUS_APPROVED
-        if auto_approves(conn, draft.campaign_id)
-        else STATUS_PENDING_APPROVAL
-    )
     moment = now_timestamp(now)
 
     with transaction(conn):
-        conn.execute(
+        draft = require_draft(conn, draft_id)
+        require_owner(draft, account_id)
+        if draft.status not in _SUBMITTABLE:
+            raise DraftStateError(draft_id, draft.status, "submitted to")
+
+        generated_text: str | None = None
+        verdict_json: str | None = None
+
+        if draft.is_verdict_kind:
+            parsed = parse_verdict(verdict, draft_id=draft_id)
+            # The rationale is generated text too, so it is held to the writing
+            # style rules like everything else a model produces here. It is never
+            # sent to LinkedIn, but "all generated text follows the voice rules"
+            # is worth more unconditional than qualified, and the cost of getting
+            # it wrong is one regeneration.
+            reason_violations = style_violations(parsed.reason, policy)
+            if reason_violations:
+                raise DraftStyleError(draft_id, reason_violations)
+            verdict_json = encode_verdict(parsed)
+            if text is not None and text.strip():
+                generated_text = validate_text(
+                    "message", text, draft_id=draft_id, policy=policy
+                )
+        else:
+            if verdict is not None:
+                raise DraftStateError(
+                    draft_id, draft.status, "given a verdict; it is a text draft"
+                )
+            if text is None:
+                raise DraftStyleError(draft_id, ["no generated text was submitted"])
+            generated_text = validate_text(
+                draft.kind, text, draft_id=draft_id, policy=policy
+            )
+
+        status = (
+            STATUS_APPROVED
+            if auto_approves(conn, draft.campaign_id)
+            else STATUS_PENDING_APPROVAL
+        )
+        cursor = conn.execute(
             """
             UPDATE ai_drafts
             SET generated_text = ?, verdict_json = ?, status = ?, model = ?,
                 decided_at = ?
-            WHERE id = ?
+            WHERE id = ? AND status = ?
             """,
             (
                 generated_text,
@@ -566,9 +604,12 @@ def submit_draft(
                 model if model is not None else draft.model,
                 moment if status == STATUS_APPROVED else None,
                 draft_id,
+                draft.status,
             ),
         )
-    return require_draft(conn, draft_id)
+        if cursor.rowcount != 1:  # pragma: no cover - the transaction serialises writers
+            raise DraftStateError(draft_id, draft.status, "submitted to")
+        return require_draft(conn, draft_id)
 
 
 def approve_draft(
@@ -578,6 +619,8 @@ def approve_draft(
     approved: bool = True,
     note: str | None = None,
     now: datetime | str | None = None,
+    expected_text: str | None = None,
+    account_id: int | None = None,
 ) -> Draft:
     """Release a draft for use, or reject it.
 
@@ -587,39 +630,58 @@ def approve_draft(
     behaviour this rule exists to allow. Nothing can be approved out of
     `needs_generation`, since there is no text to approve, and nothing can be
     approved out of `sent`, since it has already gone.
+
+    Pass `expected_text` with the text the reviewer actually read. Submitting
+    over a `pending_approval` row is already refused, so this is belt and braces
+    against anything that edits the table outside this module. It costs one
+    comparison and it removes the last way to approve text nobody saw.
     """
-    draft = require_draft(conn, draft_id)
     action = "approved" if approved else "rejected"
-
-    if draft.status == STATUS_NEEDS_GENERATION:
-        raise DraftStateError(draft_id, draft.status, f"{action}; nothing has been generated")
-    if draft.status == STATUS_SENT:
-        raise DraftStateError(draft_id, draft.status, f"{action}; it has already been sent")
-    if draft.status == STATUS_REJECTED and approved:
-        raise DraftStateError(
-            draft_id, draft.status, "approved; regenerate it and submit again"
-        )
-    if draft.status == STATUS_APPROVED and approved:
-        return draft
-    if draft.status == STATUS_REJECTED and not approved:
-        return draft
-
     moment = now_timestamp(now)
-    context = dict(draft.context)
-    if note:
-        context["approval_note"] = str(note)[:500]
 
     with transaction(conn):
-        conn.execute(
-            "UPDATE ai_drafts SET status = ?, decided_at = ?, context_json = ? WHERE id = ?",
+        draft = require_draft(conn, draft_id)
+        require_owner(draft, account_id)
+
+        if draft.status == STATUS_NEEDS_GENERATION:
+            raise DraftStateError(
+                draft_id, draft.status, f"{action}; nothing has been generated"
+            )
+        if draft.status == STATUS_SENT:
+            raise DraftStateError(
+                draft_id, draft.status, f"{action}; it has already been sent"
+            )
+        if draft.status == STATUS_REJECTED and approved:
+            raise DraftStateError(
+                draft_id, draft.status, "approved; regenerate it and submit again"
+            )
+        if expected_text is not None and (draft.generated_text or "") != expected_text:
+            raise DraftChangedError(draft_id)
+        if draft.status == STATUS_APPROVED and approved:
+            return draft
+        if draft.status == STATUS_REJECTED and not approved:
+            return draft
+
+        context = dict(draft.context)
+        if note:
+            context["approval_note"] = str(note)[:500]
+
+        cursor = conn.execute(
+            """
+            UPDATE ai_drafts SET status = ?, decided_at = ?, context_json = ?
+            WHERE id = ? AND status = ?
+            """,
             (
                 STATUS_APPROVED if approved else STATUS_REJECTED,
                 moment,
                 json.dumps(context, default=str, sort_keys=True),
                 draft_id,
+                draft.status,
             ),
         )
-    return require_draft(conn, draft_id)
+        if cursor.rowcount != 1:  # pragma: no cover - the transaction serialises writers
+            raise DraftStateError(draft_id, draft.status, action)
+        return require_draft(conn, draft_id)
 
 
 def approved_text(conn: sqlite3.Connection, draft_id: int) -> str:
@@ -629,6 +691,11 @@ def approved_text(conn: sqlite3.Connection, draft_id: int) -> str:
     here rather than reading `generated_text` off a `Draft`, because this is the
     single line that enforces "AI-generated free text is never sent without
     approval".
+
+    This is a read, not a reservation, and it deliberately does not try to be
+    one. The reservation already exists one level up: SEQ-01's `claim_step` puts
+    the lead in `processing` under a lease, and two workers cannot hold the same
+    lead. A caller sending without that lease is outside the design.
     """
     draft = require_draft(conn, draft_id)
     if draft.status != STATUS_APPROVED:
@@ -647,15 +714,19 @@ def mark_sent(
     """Record that an approved draft was used. Legal only from `approved`.
 
     The second half of the safety rule. Even a caller that reached around
-    :func:`approved_text` cannot close the loop without an approved row.
+    :func:`approved_text` cannot close the loop without an approved row, and the
+    conditional update means two workers racing to send the same draft cannot
+    both win.
     """
-    draft = require_draft(conn, draft_id)
-    if draft.status != STATUS_APPROVED:
-        raise DraftNotApprovedError(draft_id, draft.status)
-
     with transaction(conn):
-        conn.execute(
-            "UPDATE ai_drafts SET status = ?, decided_at = ? WHERE id = ?",
-            (STATUS_SENT, now_timestamp(now), draft_id),
+        draft = require_draft(conn, draft_id)
+        if draft.status != STATUS_APPROVED:
+            raise DraftNotApprovedError(draft_id, draft.status)
+
+        cursor = conn.execute(
+            "UPDATE ai_drafts SET status = ?, decided_at = ? WHERE id = ? AND status = ?",
+            (STATUS_SENT, now_timestamp(now), draft_id, STATUS_APPROVED),
         )
-    return require_draft(conn, draft_id)
+        if cursor.rowcount != 1:  # pragma: no cover - the transaction serialises writers
+            raise DraftNotApprovedError(draft_id, draft.status)
+        return require_draft(conn, draft_id)

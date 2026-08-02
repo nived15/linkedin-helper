@@ -15,12 +15,14 @@ from datetime import datetime, timezone
 import pytest
 
 from linkedin_mcp.core.db import initialize_database
+from linkedin_mcp.drafts import routing
 from linkedin_mcp.drafts import (
     ICP_ACTION,
     ICP_FILTER_NAME,
     STATUS_APPROVED,
     STATUS_SENT,
     DraftStateError,
+    DraftStyleError,
     MalformedVerdictError,
     Verdict,
     approve_draft,
@@ -28,7 +30,9 @@ from linkedin_mcp.drafts import (
     encode_verdict,
     ensure_draft,
     icp_gate_step,
+    is_icp_gate,
     latest_verdict,
+    park_draft,
     parse_verdict,
     register_icp_filter,
     request_draft,
@@ -42,6 +46,7 @@ from linkedin_mcp.sequences import (
     StepSpec,
     apply_filter_step,
     claim_step,
+    complete_step,
     create_campaign,
     define_steps,
     enrol_lead,
@@ -98,6 +103,15 @@ def clean_filter_registry():
     reset_filters()
     yield
     reset_filters()
+
+
+@pytest.fixture()
+def campaign_lead(conn, account, lead):
+    """A campaign with an ICP gate and a lead claimed onto it."""
+    campaign = gate_only(conn, account)
+    enrol_lead(conn, campaign.id, lead, now=BASE_TIME)
+    claim_step(conn, campaign.id, lead, worker_id="w1", now=BASE_TIME)
+    return campaign, lead
 
 
 def gate_only(conn, account_id, *, approval_mode="auto", on_failure="fail"):
@@ -518,3 +532,166 @@ def test_the_latest_released_verdict_wins(conn, account, lead):
     submit_draft(conn, second.id, verdict=MATCH)
 
     assert latest_verdict(conn, campaign.id, lead).match is True
+
+
+def test_a_malformed_newest_verdict_never_falls_back_to_an_older_one(conn, account, lead):
+    """"The client regressed" and "the client said no" are different facts."""
+    campaign = gate_only(conn, account)
+    enrol_lead(conn, campaign.id, lead, now=BASE_TIME)
+    old = request_draft(conn, campaign.id, lead, "icp_evaluation")
+    submit_draft(conn, old.id, verdict=MATCH)
+    new = request_draft(conn, campaign.id, lead, "icp_evaluation")
+    submit_draft(conn, new.id, verdict=NO_MATCH)
+    corrupt_verdict(conn, new.id, '{"score": 0.5, "reason": "truncated"}')
+
+    with pytest.raises(MalformedVerdictError):
+        latest_verdict(conn, campaign.id, lead)
+
+
+def test_one_gates_verdict_is_never_reused_by_another_gate(conn, account, lead):
+    """Two ICP gates in one campaign are two questions, not one."""
+    campaign = create_campaign(
+        conn, account, "Two gates", status="active", approval_mode="auto"
+    )
+    define_steps(
+        conn,
+        campaign.id,
+        [icp_gate_step(ICP), icp_gate_step({"who": "and also a budget holder"})],
+    )
+    enrol_lead(conn, campaign.id, lead, now=BASE_TIME)
+    first_step = step_at_ord(conn, campaign.id, 1)
+    second_step = step_at_ord(conn, campaign.id, 2)
+
+    gate = ensure_draft(conn, campaign.id, lead, "icp_evaluation", step=first_step)
+    submit_draft(conn, gate.draft.id, verdict=MATCH)
+    register_icp_filter()
+
+    assert latest_verdict(conn, campaign.id, lead, step_id=first_step.id).match is True
+    assert latest_verdict(conn, campaign.id, lead, step_id=second_step.id) is None
+    with pytest.raises(LookupError):
+        evaluate_filter(conn, account, campaign.id, lead, second_step)
+
+
+def test_a_verdict_cannot_resolve_a_step_it_never_evaluated(conn, account, lead):
+    """The lead moved on, so this verdict is about a step that already happened."""
+    campaign = gate_then_invite(conn, account)
+    enrol_lead(conn, campaign.id, lead, now=BASE_TIME)
+    claim_step(conn, campaign.id, lead, worker_id="w1", now=BASE_TIME)
+    gate = ensure_draft(conn, campaign.id, lead, "icp_evaluation")
+    submit_draft(conn, gate.draft.id, verdict=NO_MATCH)
+    # Something else advanced the lead onto the invite step in the meantime.
+    complete_step(conn, campaign.id, lead, worker_id="w1", now=BASE_TIME)
+
+    with pytest.raises(DraftStateError) as error:
+        route_icp_verdict(conn, gate.draft.id)
+
+    assert "parked for step" in str(error.value)
+    record = get_campaign_lead(conn, campaign.id, lead)
+    assert record.current_step_ord == 2
+    assert record.sublist == "queue"
+
+
+def test_routing_moves_the_lead_and_spends_the_verdict_together(
+    conn, account, lead, monkeypatch
+):
+    """One transaction: if spending the verdict fails, the lead never moved.
+
+    Forced rather than argued. `mark_sent` is made to raise after the sub-list
+    write, and the lead must come back out of the rollback exactly where it was.
+    """
+    campaign = gate_only(conn, account)
+    enrol_lead(conn, campaign.id, lead, now=BASE_TIME)
+    claim_step(conn, campaign.id, lead, worker_id="w1", now=BASE_TIME)
+    gate = ensure_draft(conn, campaign.id, lead, "icp_evaluation")
+    submit_draft(conn, gate.draft.id, verdict=NO_MATCH)
+
+    def explode(*args, **kwargs):
+        raise RuntimeError("the draft store fell over mid-route")
+
+    monkeypatch.setattr(routing, "mark_sent", explode)
+
+    with pytest.raises(RuntimeError):
+        route_icp_verdict(conn, gate.draft.id, worker_id="w1")
+
+    record = get_campaign_lead(conn, campaign.id, lead)
+    assert record.sublist == "processing"
+    assert record.current_step_ord == 1
+    assert require_draft(conn, gate.draft.id).status == STATUS_APPROVED
+    assert conn.in_transaction is False
+
+    # And with the store working again the same verdict still routes cleanly.
+    monkeypatch.undo()
+    assert route_icp_verdict(conn, gate.draft.id, worker_id="w1").sublist == "failed"
+
+
+def test_a_verdict_parked_without_a_step_resolves_nothing(conn, account, campaign_lead):
+    campaign, lead_id = campaign_lead
+    draft = park_draft(
+        conn,
+        account_id=account,
+        kind="icp_evaluation",
+        campaign_id=campaign.id,
+        lead_id=lead_id,
+    )
+    submit_draft(conn, draft.id, verdict=NO_MATCH)
+
+    with pytest.raises(DraftStateError) as error:
+        route_icp_verdict(conn, draft.id, worker_id="w1")
+
+    assert "without a step" in str(error.value)
+    assert get_campaign_lead(conn, campaign.id, lead_id).sublist == "processing"
+
+
+def test_a_verdict_can_never_resolve_an_outreach_step(conn, account, lead):
+    """An ICP score must not be able to complete or fail an invite."""
+    campaign = create_campaign(
+        conn, account, "Invite first", status="active", approval_mode="auto"
+    )
+    define_steps(conn, campaign.id, [StepSpec("connection_request")])
+    enrol_lead(conn, campaign.id, lead, now=BASE_TIME)
+    claim_step(conn, campaign.id, lead, worker_id="w1", now=BASE_TIME)
+    invite_step = step_at_ord(conn, campaign.id, 1)
+
+    draft = request_draft(conn, campaign.id, lead, "icp_evaluation", step=invite_step)
+    submit_draft(conn, draft.id, verdict=MATCH)
+
+    assert is_icp_gate(invite_step) is False
+    with pytest.raises(DraftStateError) as error:
+        route_icp_verdict(conn, draft.id, worker_id="w1")
+
+    assert "not an ICP gate" in str(error.value)
+    assert get_campaign_lead(conn, campaign.id, lead).sublist == "processing"
+
+
+def test_a_newest_verdict_with_no_verdict_at_all_never_falls_back(conn, account, lead):
+    campaign = gate_only(conn, account)
+    enrol_lead(conn, campaign.id, lead, now=BASE_TIME)
+    old = request_draft(conn, campaign.id, lead, "icp_evaluation")
+    submit_draft(conn, old.id, verdict=MATCH)
+    new = request_draft(conn, campaign.id, lead, "icp_evaluation")
+    submit_draft(conn, new.id, verdict=NO_MATCH)
+    corrupt_verdict(conn, new.id, None)
+
+    with pytest.raises(MalformedVerdictError):
+        latest_verdict(conn, campaign.id, lead)
+
+
+def test_a_verdict_reason_is_held_to_the_same_voice_rules(conn, account, lead):
+    """All generated text, not only the text LinkedIn will show."""
+    campaign = gate_only(conn, account)
+    enrol_lead(conn, campaign.id, lead, now=BASE_TIME)
+    draft = request_draft(conn, campaign.id, lead, "icp_evaluation")
+
+    with pytest.raises(DraftStyleError) as error:
+        submit_draft(
+            conn,
+            draft.id,
+            verdict={
+                "match": True,
+                "score": 0.9,
+                "reason": "Platform lead \u2014 owns the tooling budget.",
+            },
+        )
+
+    assert "forbidden dash" in str(error.value)
+    assert require_draft(conn, draft.id).status == "needs_generation"
