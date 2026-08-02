@@ -43,6 +43,7 @@ import linkedin_browser_mcp
 from linkedin_mcp.audit import instrument
 from linkedin_mcp.audit.log import AuditLog, reset_audit_log, set_audit_log
 from linkedin_mcp.drafts import request_draft, submit_draft
+from linkedin_mcp.executors.contract import ADHOC_ACTIONS
 from linkedin_mcp.leads import create_lead
 from linkedin_mcp.prompts import (
     PROMPT_NAMES,
@@ -51,6 +52,7 @@ from linkedin_mcp.prompts import (
     read_first,
     voice_rules,
 )
+from linkedin_mcp.resources import ALL_RESOURCE_URIS
 from linkedin_mcp.resources.contract import RESOURCE_MIME_TYPE
 from linkedin_mcp.sequences import (
     StepSpec,
@@ -59,6 +61,7 @@ from linkedin_mcp.sequences import (
     enrol_leads,
     set_campaign_status,
 )
+from linkedin_mcp.sequences.steps import LOCAL_ACTIONS
 from linkedin_mcp.templating import create_template
 from linkedin_mcp.templating.style import (
     FILLER_OPENERS,
@@ -80,10 +83,28 @@ REQUIRED_ARGUMENTS: dict[str, dict[str, str]] = {
 }
 """The arguments each prompt cannot render without. The rest default."""
 
+OPTIONAL_ARGUMENTS: dict[str, set[str]] = {
+    "new_campaign": {"goal", "daily_invite_target"},
+    "review_drafts": {"kind", "campaign_id"},
+    "triage_replies": {"limit"},
+    "weekly_report": set(),
+    "safety_check": set(),
+    "harvest_audience": {"target"},
+}
+"""Every optional argument, pinned so a dead one cannot be added quietly.
+
+`weekly_report` used to take `week_of`. It was removed rather than documented,
+because `linkedin://analytics/weekly` is a rolling seven-day read with no date
+parameter, so a client that passed a date would have been handed the latest week
+and told it was an older one.
+"""
+
 GOOD_NOTE = (
     "{IF firstName}Hi {firstName},{ELSE}Hi there,{END} saw your team at "
     "{company} is midway through a Copilot rollout. Happy to compare notes."
 )
+
+PROFILE_URL = "https://www.linkedin.com/in/ada-lovelace/"
 
 
 # --------------------------------------------------------------------------
@@ -181,13 +202,16 @@ async def test_every_prompt_declares_the_arguments_it_needs():
 
     assert declared["new_campaign"]["audience"] is True
     assert declared["new_campaign"]["goal"] is False
-    assert declared["new_campaign"]["daily_invite_cap"] is False
+    assert declared["new_campaign"]["daily_invite_target"] is False
     assert declared["harvest_audience"]["source"] is True
     assert declared["safety_check"] == {}
+    assert declared["weekly_report"] == {}
 
     for name, arguments in declared.items():
         required = {key for key, needed in arguments.items() if needed}
+        optional = {key for key, needed in arguments.items() if not needed}
         assert required == set(REQUIRED_ARGUMENTS.get(name, {})), name
+        assert optional == OPTIONAL_ARGUMENTS[name], name
 
 
 @pytest.mark.asyncio
@@ -363,8 +387,9 @@ async def test_triage_replies_names_the_unread_definition_and_sends_nothing():
 
     assert "linkedin://inbox/unread" in text
     assert "newest stored message is inbound" in text
-    assert "action_enqueue_adhoc" in text
+    assert "lead_get" in text
     assert "He decides" in text
+    assert "send none of them yourself" in text
 
 
 @pytest.mark.asyncio
@@ -414,21 +439,113 @@ async def test_harvest_audience_names_every_source_and_no_sales_navigator():
 
 
 @pytest.mark.asyncio
+async def test_no_prompt_tells_a_client_to_use_an_action_with_no_executor():
+    """A prompt that named `message` would send a client into a refusal.
+
+    `message` has a ceiling in `core.config` and a place in the queue, and it
+    has no executor: `ADHOC_ACTIONS` leaves it out on purpose because this
+    repository has no message composer selectors. So `action_enqueue_adhoc`
+    refuses it and a campaign step naming it can never run.
+
+    Checked against the registry rather than against a hardcoded list, so an
+    action that gains an executor stops being forbidden here on the same day.
+    """
+    absent = {"message", "send_message", "endorse_skills"} - set(ADHOC_ACTIONS)
+    assert absent, "this test is about actions with no executor; there are none"
+
+    for name in PROMPT_NAMES:
+        text = await render(name)
+        for action in absent:
+            assert f"action='{action}'" not in text, (name, action)
+            assert f'action="{action}"' not in text, (name, action)
+
+
+@pytest.mark.asyncio
+async def test_the_action_a_prompt_prescribes_actually_works():
+    """Assert behaviour, not the presence of a name in a string.
+
+    `new_campaign` names `action_enqueue_adhoc`'s sibling actions as the ones a
+    step may use. This calls the enqueue tool with an action those prompts list
+    as runnable and with one they explicitly say is refused, so the guidance is
+    checked against the server rather than against itself.
+    """
+    queued = await call(
+        "action_enqueue_adhoc", action="profile_view", profile_url=PROFILE_URL
+    )
+    assert queued["status"] == "queued"
+
+    refused = await call("action_enqueue_adhoc", action="message", profile_url=PROFILE_URL)
+    assert refused["status"] == "error"
+    assert "message" not in set(refused["known_actions"])
+
+
+@pytest.mark.asyncio
+async def test_triage_replies_says_replying_is_manual_rather_than_naming_a_tool():
+    text = await render("triage_replies")
+
+    assert "There is no message executor on this server" in text
+    assert "he sends it himself" in text
+    assert "action='message'" not in text
+
+
+@pytest.mark.asyncio
+async def test_new_campaign_only_names_steps_the_worker_can_run():
+    text = await render("new_campaign")
+
+    assert "There is no message step and no send_message action" in text
+    for action in sorted(ADHOC_ACTIONS):
+        assert action in text, action
+    for action in sorted(LOCAL_ACTIONS):
+        assert action in text, action
+
+
+@pytest.mark.asyncio
+async def test_new_campaign_does_not_promise_to_set_a_cap_it_cannot_write():
+    """No tool on this server writes `account_limits`, so the prompt says so."""
+    tools = {tool.name for tool in await SERVED.list_tools()}
+    assert not {name for name in tools if "limit" in name}, tools
+
+    text = await render("new_campaign", {"audience": "x", "daily_invite_target": "20"})
+
+    assert "No tool on this server writes account_limits" in text
+    assert "Daily invitation target: 20" in text
+
+
+@pytest.mark.asyncio
+async def test_weekly_report_admits_it_cannot_report_an_earlier_week():
+    """`analytics_weekly` is a rolling read with no date parameter."""
+    text = await render("weekly_report")
+
+    assert "rolling read with no date" in text
+    assert "linkedin://worker/status" in text
+@pytest.mark.asyncio
 async def test_every_prompt_points_at_the_resources_it_depends_on():
-    """A prompt that told a client what to do without what to read is guessing."""
+    """A prompt that told a client what to do without what to read is guessing.
+
+    Checked in both directions. One way only would let a prompt mention a URI
+    its dependency map never declared, which is how `weekly_report` came to tell
+    clients to read `linkedin://worker/status` while omitting it from the map.
+    """
     for name in PROMPT_NAMES:
         text = await render(name)
         line = read_first(name)
         assert line, name
         assert line in text, name
-        for uri in PROMPT_RESOURCES[name]:
+
+        declared = set(PROMPT_RESOURCES[name])
+        for uri in declared:
             assert uri in text, (name, uri)
+
+        mentioned = {
+            uri
+            for uri in ALL_RESOURCE_URIS
+            if "{" not in uri and uri in text.replace(line, "")
+        }
+        assert mentioned <= declared, (name, sorted(mentioned - declared))
 
 
 def test_the_prompt_resource_map_uses_real_uris():
     """Imported from the resource contract, so a URI that moves takes these."""
-    from linkedin_mcp.resources import ALL_RESOURCE_URIS
-
     for name, uris in PROMPT_RESOURCES.items():
         assert uris, name
         for uri in uris:

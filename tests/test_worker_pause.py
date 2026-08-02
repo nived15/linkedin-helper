@@ -262,6 +262,64 @@ async def test_a_paused_tick_says_paused_in_its_heartbeat(env):
     assert read_heartbeat(env.conn, "w1").status == STATUS_PAUSED
 
 
+async def test_a_pause_landing_mid_tick_stops_the_rest_of_the_bunch(env):
+    """The race the flag would otherwise lose.
+
+    A tick selects up to fifteen jobs and then humanises the gaps between them,
+    so a `worker_pause` that landed after selection but before the last job
+    would previously have returned while the rest of that tick kept sending. The
+    executor here pauses the worker from inside the first job, which is exactly
+    that timing, and the second job must not run.
+
+    Checked through the executor rather than through the selection, because
+    selection is not where this could go wrong.
+    """
+    from linkedin_mcp.worker import ActionResult, ActionStatus, build_worker
+
+    first = env.enqueue_ad_hoc("profile_search")
+    second = env.enqueue_ad_hoc("profile_search")
+    seen: list[int] = []
+
+    async def pause_from_inside(context) -> ActionResult:
+        seen.append(context.job.id)
+        pause_worker(env.conn, env.account_id, reason="stop, now")
+        return ActionResult(status=ActionStatus.SUCCESS)
+
+    worker = build_worker(
+        env.conn,
+        env.account_id,
+        worker_id="w1",
+        executors={"profile_search": pause_from_inside},
+        pace_between_actions=False,
+    )
+    report = await worker.tick(now=at(minutes=1))
+
+    assert seen == [first], "the second job ran after the pause landed"
+    assert report.paused is True
+    assert len(report.jobs) == 1
+    assert env.job(second)["state"] == "pending"
+
+
+async def test_a_tick_that_was_not_paused_does_not_claim_it_was(env):
+    """The mid-tick check must not report a pause that never happened."""
+    from linkedin_mcp.worker import build_worker
+
+    env.enqueue_ad_hoc("profile_search")
+    executor = RecordingExecutor()
+
+    worker = build_worker(
+        env.conn,
+        env.account_id,
+        worker_id="w1",
+        executors={"profile_search": executor},
+        pace_between_actions=False,
+    )
+    report = await worker.tick(now=at(minutes=1))
+
+    assert report.paused is False
+    assert len(executor) == 1
+
+
 # ----------------------------------------------------------------------
 # The tools
 # ----------------------------------------------------------------------

@@ -58,6 +58,7 @@ from linkedin_mcp.core.config import (
     INVITE_ACTION,
     ceiling_for,
 )
+from linkedin_mcp.executors.contract import ADHOC_ACTIONS
 from linkedin_mcp.prompts.contract import (
     FUNNEL_URI_HINT,
     HARVEST_AUDIENCE,
@@ -69,6 +70,7 @@ from linkedin_mcp.prompts.contract import (
     read_first,
 )
 from linkedin_mcp.prompts.voice import voice_rules
+from linkedin_mcp.sequences.steps import LOCAL_ACTIONS
 
 __all__ = ["register_linkedin_prompts"]
 
@@ -102,6 +104,24 @@ def _invite_ceilings() -> str:
     )
 
 
+def _executable_actions() -> str:
+    """List the actions a worker can actually run, read from the registry.
+
+    Generated rather than typed, because a prompt that named an action with no
+    executor would send a client down a path that fails at the queue. That is
+    exactly what happened with `message`: the queue accepts the idea, the
+    ceiling exists, and there is no executor, so a step naming it can never run.
+    Reading `ADHOC_ACTIONS` means an action added later appears here the day its
+    executor does.
+    """
+    runnable = ", ".join(sorted(ADHOC_ACTIONS))
+    local = ", ".join(sorted(LOCAL_ACTIONS))
+    return (
+        f"{runnable}. Local steps that reach nothing on LinkedIn are {local}, "
+        "and they cost no budget."
+    )
+
+
 def register_linkedin_prompts(mcp: FastMCP) -> None:
     """Register the six MCP-05 prompts on `mcp`.
 
@@ -121,7 +141,7 @@ def register_linkedin_prompts(mcp: FastMCP) -> None:
     def new_campaign(
         audience: str,
         goal: str = "",
-        daily_invite_cap: str = "",
+        daily_invite_target: str = "",
     ) -> str:
         """Walk a campaign from nothing to approved. Ends at `campaign_approve`."""
         return _block(
@@ -137,9 +157,9 @@ def register_linkedin_prompts(mcp: FastMCP) -> None:
                 "Ask what a reply is supposed to lead to, then continue.",
             ),
             _given(
-                "Daily invitation cap",
-                daily_invite_cap,
-                "Use the account default.",
+                "Daily invitation target",
+                daily_invite_target,
+                "Use whatever the account already allows.",
             ),
             "Stage 1, audience.\n"
             "Find the people first, because a sequence written before you know "
@@ -157,10 +177,16 @@ def register_linkedin_prompts(mcp: FastMCP) -> None:
             "nothing on LinkedIn and cost no budget. Qualifying before you "
             "invite is what stops the day's invitations going to the wrong "
             "people. campaign_set_icp attaches a plain-language ideal customer "
-            "profile as exactly that kind of gate. Then the outreach steps: an "
-            "invitation, then a follow-up message with a delay, then whatever "
-            "the goal needs. Set bunch_size when several leads should get the "
-            "same step back to back.",
+            "profile as exactly that kind of gate. Then the outreach steps.\n"
+            "Only use action types the worker can actually execute: "
+            + _executable_actions()
+            + "\n"
+            "There is no message step and no send_message action. The queue is "
+            "ready for one and this repository has no message composer "
+            "selectors, so an executor would be a promise it cannot keep. Build "
+            "the sequence out of what exists and tell Nived that follow-up "
+            "messages are manual for now. Set bunch_size when several leads "
+            "should get the same step back to back.",
             "Stage 3, templates.\n"
             "Read " + FUNNEL_URI_HINT + " and linkedin://templates to see what "
             "already exists before writing anything new. Attach a stored "
@@ -175,9 +201,12 @@ def register_linkedin_prompts(mcp: FastMCP) -> None:
             "have not read.",
             "Stage 4, limits.\n" + _invite_ceilings() + "\n"
             "Read linkedin://safety/today for the headroom left before you "
-            "choose numbers. Campaign steps only run inside the account's "
-            "working hours, so a cap the account cannot physically reach in a "
-            "day is a number that means nothing.",
+            "commit to a number. No tool on this server writes account_limits, "
+            "so a target you were given is a plan to check the campaign against "
+            "rather than a cap you can set from here. Say so plainly if the "
+            "target is above what the account currently allows. Campaign steps "
+            "only run inside the account's working hours, so a target the "
+            "account cannot physically reach in a day means nothing.",
             "Stage 5, the gate.\n"
             "Call campaign_approve. That is the single human sign-off and it is "
             "where this prompt ends. Approving moves the campaign from draft to "
@@ -261,10 +290,16 @@ def register_linkedin_prompts(mcp: FastMCP) -> None:
             "Not a reply: an auto-responder or an unrelated message. Say so and "
             "move on.",
             "Then hand the list to Nived with your drafts attached. He decides "
-            "what goes out. If he approves a reply, queue it with "
-            "action_enqueue_adhoc using action='message', the lead_id and "
-            "approved=True. The worker then sends it under the same caps and "
-            "the same dedupe window a campaign message runs under.",
+            "what goes out, and he sends it himself.\n"
+            "There is no message executor on this server. The queue accepts the "
+            "idea and this repository has no message composer selectors, so the "
+            "enqueue tool refuses a message action. Naming it would send him "
+            "down a path that fails.\n"
+            "The runnable actions are "
+            + _executable_actions()
+            + "\n"
+            "Say plainly that replying is manual today rather than implying the "
+            "worker will do it.",
             voice_rules(),
         )
 
@@ -275,14 +310,18 @@ def register_linkedin_prompts(mcp: FastMCP) -> None:
             "refused, and the one thing to change next week."
         ),
     )
-    def weekly_report(week_of: str = "") -> str:
+    def weekly_report() -> str:
         """Seven days of outcomes, read from actions_log rather than guessed."""
         return _block(
             "Write Nived's weekly outreach report. Every number in it comes "
             "from a resource. Do not estimate anything and do not carry a "
             "number over from a previous report.",
             read_first(WEEKLY_REPORT),
-            _given("Week", week_of, "Report the last seven days."),
+            "The window is the last seven days, ending now. "
+            "linkedin://analytics/weekly is a rolling read with no date "
+            "parameter, so there is no way to ask this server for an earlier "
+            "week. Say which seven days you are reporting rather than letting "
+            "the reader assume.",
             "Cover five things, in this order.\n"
             "1. Volume. Actions attempted per day and per action type, from "
             "linkedin://analytics/weekly. Say how much of the ceiling that "

@@ -440,12 +440,17 @@ client that has never heard of Copilot gets the walkthrough too.
 
 | Prompt | Arguments | What it walks |
 | --- | --- | --- |
-| `new_campaign` | `audience` (required), `goal`, `daily_invite_cap` | Audience, sequence, templates, limits, then `campaign_approve` |
+| `new_campaign` | `audience` (required), `goal`, `daily_invite_target` | Audience, sequence, templates, limits, then `campaign_approve` |
 | `review_drafts` | `kind`, `campaign_id` | The generation queue, then the human approval queue |
 | `triage_replies` | `limit` | Sorting the unread inbox into four buckets, sending none of them |
-| `weekly_report` | `week_of` | Volume, outcome, funnel, health and the one change to make |
+| `weekly_report` | none | Volume, outcome, funnel, health and the one change to make |
 | `safety_check` | none | Headroom, account state, worker health, and `worker_pause` if not |
 | `harvest_audience` | `source` (required), `target` | Picking a source, queueing it, checking what landed |
+
+The prompts only name actions the worker can actually execute. The list is read
+from the executor registry rather than typed, so a prompt cannot recommend
+`message`, which has a ceiling and a place in the queue and no executor behind
+it because this repository has no message composer selectors.
 
 Every prompt carries Nived's writing rules, and the rules are generated from
 `linkedin_mcp/templating/style.py` rather than restated, so a banned opener added

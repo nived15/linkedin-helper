@@ -32,7 +32,6 @@ import unicodedata
 
 from linkedin_mcp.templating.style import (
     DEFAULT_STYLE,
-    FORBIDDEN_DASHES,
     StylePolicy,
 )
 
@@ -60,8 +59,13 @@ and the numbered rules below do the work that matters.
 _UNNAMED_DASH = "dash"
 
 
-def banned_dash_names() -> tuple[str, ...]:
-    """Every forbidden dash, named, straight from `style.py`.
+def banned_dash_names(policy: StylePolicy = DEFAULT_STYLE) -> tuple[str, ...]:
+    """Every forbidden dash, named, straight from the policy.
+
+    Reads `policy.forbidden_dashes` rather than the module constant, so a
+    caller who added a dash through `extra_forbidden_dashes` sees it named. The
+    constant is the floor of that property and no policy can shrink it, so the
+    default result is still every dash in `style.py`.
 
     Named rather than shown. A prompt that listed the characters would contain
     the very characters it bans, so it would fail the check it is asking the
@@ -69,7 +73,7 @@ def banned_dash_names() -> tuple[str, ...]:
     handed seven of them.
     """
     names: list[str] = []
-    for dash in FORBIDDEN_DASHES:
+    for dash in policy.forbidden_dashes:
         try:
             names.append(unicodedata.name(dash).lower())
         except ValueError:  # pragma: no cover - every dash in style.py is named
@@ -84,7 +88,7 @@ def voice_rules(policy: StylePolicy = DEFAULT_STYLE) -> str:
     than written down here, so this cannot fall out of step with the checker
     that rejects a template.
     """
-    dashes = ", ".join(banned_dash_names())
+    dashes = ", ".join(banned_dash_names(policy))
     openers = "\n".join(f'   - "{opener}"' for opener in policy.filler_openers)
     return "\n".join(
         [

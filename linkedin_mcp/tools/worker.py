@@ -26,8 +26,10 @@ reaches LinkedIn not at all and because refusing to stop the worker on the
 grounds that the day's budget is spent would be exactly backwards.
 
 Pausing is not cancelling. Queued jobs keep their state and their due time, so a
-resume picks the queue up where it stopped. A job already in flight finishes,
-because a flag cannot un-send half an invitation.
+resume picks the queue up where it stopped. The pause is re-read before every
+job rather than only at selection time, so a tick already part way through its
+work stops at the next job; a job already in flight finishes, because a flag
+cannot un-send half an invitation.
 """
 
 from __future__ import annotations
@@ -78,10 +80,14 @@ def register_worker_tools(mcp: FastMCP) -> None:
         this account: campaign steps and ad-hoc work such as harvests and one-off
         invitations, which no campaign status can reach.
 
+        The guarantee, stated precisely. No job starts after this returns: the
+        worker re-reads the pause before every job, not only when it selects
+        work, so a tick already part way through its bunch stops at the next job
+        rather than finishing the batch. A job already in flight completes,
+        because a flag cannot un-send half an invitation.
+
         Nothing is cancelled. Every queued job keeps its due time, so
-        `worker_resume` picks the queue up where it stopped. A job the worker has
-        already leased runs to completion, because half an invitation cannot be
-        called back by a flag.
+        `worker_resume` picks the queue up where it stopped.
 
         Confirm it took effect by reading `linkedin://worker/status`, which
         reports `paused` and, once the flag is set, `campaigns_running: false`.
