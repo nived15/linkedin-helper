@@ -94,3 +94,30 @@ def register_lead_tools(mcp: FastMCP) -> None:
     """
     register_harvest_tools(mcp)
     register_crm_tools(mcp)
+
+
+# MCP-03 (#26) ---------------------------------------------------------------
+#
+# Appended as one contiguous block. Issue #24 is changing this same file in a
+# parallel branch, so nothing above this line is touched: the import list, the
+# `__all__` literal and `register_lead_tools` are all left exactly as MCP-02
+# wrote them.
+#
+# MCP-03's tools are a different thing from MCP-02's. A harvest tool queues an
+# extraction that only ever reads. These queue the actions that write: an
+# invitation, a comment, a share. That is why they are registered separately and
+# why `linkedin_browser_mcp.py` calls both.
+
+from linkedin_mcp.tools.actions import (  # noqa: E402
+    MAX_NOTE_CHARS,
+    enqueue_action,
+    register_action_tools,
+    validated_payload,
+)
+
+__all__ += [
+    "MAX_NOTE_CHARS",
+    "enqueue_action",
+    "register_action_tools",
+    "validated_payload",
+]

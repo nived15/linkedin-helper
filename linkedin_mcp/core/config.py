@@ -256,3 +256,53 @@ def profile_view_action(direct: bool) -> str:
     reached by navigating through the site.
     """
     return PROFILE_VIEW_DIRECT_ACTION if direct else PROFILE_VIEW_ACTION
+
+
+# MCP-03 (#26) ---------------------------------------------------------------
+#
+# Appended as one contiguous block rather than edited inline. Issue #24 is
+# changing this same file in a parallel branch, and the only merge conflict of
+# the previous wave came from one session restructuring a set literal while
+# another added names to it. Nothing above this line is touched.
+
+ADHOC_ENQUEUE_ACTION = "action_enqueue"
+"""Audit action type for a tool that queues a one-off LinkedIn action.
+
+Unmetered, and that is the whole point. The tool writes a `jobs` row and
+returns; LinkedIn is not contacted until the worker leases the job, and the
+worker's `actions_log` row spends the real budget under the action's own type.
+Metering the enqueue as well would charge a single invitation twice, once when
+an agent asked for it and again when it was actually sent, which is the same
+double-count MCP-02 avoided for harvests.
+"""
+
+ADHOC_STATUS_ACTION = "action_status"
+"""Audit action type for reading a queued action's progress. Local only."""
+
+ADHOC_CANCEL_ACTION = "action_cancel"
+"""Audit action type for cancelling a queued action before it runs.
+
+Local only, and deliberately never gated. An operator who wants to stop a
+pending action must always be able to, so refusing a cancellation because the
+day's budget is spent would be exactly backwards.
+"""
+
+ADHOC_QUEUE_ACTIONS: frozenset[str] = frozenset(
+    {ADHOC_ENQUEUE_ACTION, ADHOC_STATUS_ACTION, ADHOC_CANCEL_ACTION}
+)
+"""MCP-03's queue bookkeeping. None of these three reaches LinkedIn."""
+
+UNMETERED_ACTIONS = UNMETERED_ACTIONS | ADHOC_QUEUE_ACTIONS
+"""Extended rather than rewritten, for the file-ownership reason above.
+
+`is_metered` reads this name when it is called rather than when the module is
+imported, so widening it here is indistinguishable from having listed the three
+names in the literal, and it leaves that literal untouched for #24.
+"""
+
+__all__ += [
+    "ADHOC_CANCEL_ACTION",
+    "ADHOC_ENQUEUE_ACTION",
+    "ADHOC_QUEUE_ACTIONS",
+    "ADHOC_STATUS_ACTION",
+]
