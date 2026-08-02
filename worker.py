@@ -29,11 +29,20 @@ through ``--executors module:attribute``, where the attribute is a mapping of
 executors use is built here and handed to them, which is what "the daemon owns
 Playwright" means in practice.
 
-With no executors registered this is still a working daemon: filters resolve,
-campaigns advance through their local steps, everything that needs the browser
-fails its step and lands under the step's own `on_failure` policy, and the
-heartbeat keeps telling the truth. That is deliberate. A scheduler that only runs
-when a browser and a model are both present is a scheduler nobody can trust.
+MCP-03 (#26) made :data:`DEFAULT_EXECUTORS` the default. Until then the registry
+was empty in every process, and an ad-hoc job failed with "no executor is
+registered", which was honest but useless: the MCP tools were the only thing
+that could act, and they acted inline where no cap could bind. Now
+``linkedin_mcp.executors.linkedin`` supplies a coroutine per LinkedIn action and
+this daemon is the only process that performs one. Pass ``--no-default-executors``
+to get the old empty registry back, which is what a scheduling-only test wants.
+
+Even with the default table this is still a working daemon on a machine with no
+browser: filters resolve, campaigns advance through their local steps, everything
+that needs the browser fails its step and lands under the step's own `on_failure`
+policy, and the heartbeat keeps telling the truth. That is deliberate. A
+scheduler that only runs when a browser and a model are both present is a
+scheduler nobody can trust.
 """
 
 from __future__ import annotations
@@ -64,13 +73,28 @@ from linkedin_mcp.worker.actions import ActionRegistry
 logger = logging.getLogger("linkedin_mcp.worker")
 
 __all__ = [
+    "DEFAULT_EXECUTORS",
     "build_browser_supplier",
+    "default_executors",
     "load_executors",
     "main",
     "open_database",
     "parse_args",
     "run",
 ]
+
+DEFAULT_EXECUTORS = "linkedin_mcp.executors.linkedin:linkedin_executors"
+"""The executor table every daemon registers unless told otherwise.
+
+A `module:attribute` string rather than a direct import so the browser package
+is not pulled in by ``--status``, which must work on a machine with no
+Playwright installed.
+"""
+
+
+def default_executors() -> dict[str, Executor]:
+    """Return the built-in LinkedIn executors, importing them on demand."""
+    return load_executors([DEFAULT_EXECUTORS])
 
 
 def open_database(db_path: str | Path) -> sqlite3.Connection:
@@ -183,6 +207,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         metavar="MODULE:ATTRIBUTE",
         help="import an action_type -> coroutine mapping; may be repeated",
     )
+    parser.add_argument(
+        "--no-default-executors",
+        action="store_true",
+        help=(
+            "start with an empty registry instead of the built-in LinkedIn "
+            "executors; every action then fails as unregistered"
+        ),
+    )
     parser.add_argument("--headless", action="store_true")
     parser.add_argument(
         "--no-browser",
@@ -206,11 +238,23 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 async def run(args: argparse.Namespace, conn: sqlite3.Connection) -> int:
     """Build the worker, wire the signals, and tick until told to stop."""
-    executors = load_executors(list(args.executors))
+    specs = list(args.executors)
+    if not getattr(args, "no_default_executors", False):
+        # Ahead of anything given on the command line, so an operator who names
+        # their own table for one action type replaces the built-in rather than
+        # being silently overridden by it.
+        specs.insert(0, DEFAULT_EXECUTORS)
+    executors = load_executors(specs)
     if not executors:
         logger.warning(
             "no executors registered: local steps will run and every step that "
             "needs the browser will fail under its own on_failure policy"
+        )
+    else:
+        logger.info(
+            "registered %d executor(s): %s",
+            len(executors),
+            ", ".join(sorted(executors)),
         )
 
     worker = Worker(

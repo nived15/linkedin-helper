@@ -471,10 +471,27 @@ def test_no_manual_sleep_outside_humanize():
 
 
 def test_mcp_server_routes_pacing_and_navigation_through_the_browser_package():
-    source = (REPO_ROOT / "linkedin_browser_mcp.py").read_text(encoding="utf-8")
+    # MCP-03 (#26) moved the navigating bodies into linkedin_mcp/executors/, so
+    # the import of goto_profile moved with them. The guard follows the code:
+    # whichever module drives a page must reach the browser package for its
+    # pacing and its navigation, and must not re-roll either.
+    server = (REPO_ROOT / "linkedin_browser_mcp.py").read_text(encoding="utf-8")
+    executors = {
+        path: path.read_text(encoding="utf-8")
+        for path in sorted((REPO_ROOT / "linkedin_mcp" / "executors").glob("*.py"))
+    }
 
-    assert "from linkedin_mcp.browser.humanize import" in source
-    assert "from linkedin_mcp.browser.navigate import goto_profile" in source
-    assert "import random" not in source
-    assert "delay=25" not in source
-    assert "await session.new_page(profile_url)" not in source
+    assert "from linkedin_mcp.browser.humanize import" in server
+    navigators = [
+        path
+        for path, source in executors.items()
+        if re.search(
+            r"from linkedin_mcp\.browser\.navigate import [^\n]*goto_profile", source
+        )
+    ]
+    assert navigators, "no executor navigates through linkedin_mcp.browser.navigate"
+
+    for path, source in {**executors, REPO_ROOT / "linkedin_browser_mcp.py": server}.items():
+        assert "import random" not in source, path
+        assert "delay=25" not in source, path
+        assert "await session.new_page(profile_url)" not in source, path

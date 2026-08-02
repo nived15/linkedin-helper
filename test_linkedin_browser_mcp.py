@@ -2,6 +2,7 @@ import pytest
 import os
 import inspect
 import re
+from pathlib import Path
 
 import linkedin_browser_mcp
 import linkedin_mcp.browser.session as browser_session_module
@@ -171,11 +172,30 @@ def test_fingerprint_profile_is_stable_per_account():
 def test_selectors_are_centralized_in_browser_module():
     main_source = inspect.getsource(linkedin_browser_mcp)
     session_source = inspect.getsource(browser_session_module)
+    # MCP-03 (#26): the selector lookups moved with the page-driving bodies into
+    # linkedin_mcp/executors/, so the guard checks the whole set. Leaving it on
+    # the server alone would have declared victory over a file that no longer
+    # touches a selector either way.
+    executor_dir = Path(inspect.getfile(linkedin_browser_mcp)).parent / "linkedin_mcp" / "executors"
+    executor_sources = {
+        path: path.read_text(encoding="utf-8")
+        for path in sorted(executor_dir.glob("*.py"))
+    }
 
-    assert not re.search(r"Chrome/\d{3}\.\d+\.\d+\.\d+", main_source)
-    assert ".pv-top-card" not in main_source
-    assert ".feed-shared-update-v2" not in main_source
-    assert "selector_fallbacks" in main_source
+    for path, source in {
+        Path("linkedin_browser_mcp.py"): main_source,
+        **executor_sources,
+    }.items():
+        assert not re.search(r"Chrome/\d{3}\.\d+\.\d+\.\d+", source), path
+        assert ".pv-top-card" not in source, path
+        assert ".feed-shared-update-v2" not in source, path
+
+    users = [
+        path
+        for path, source in executor_sources.items()
+        if "selector_fallback" in source
+    ]
+    assert users, "no executor resolves a selector through the catalog"
     assert "FINGERPRINT_CATALOG" in session_source
     assert selector_fallbacks("feed_post_container")[0] == '[data-urn*="urn:li:activity"]'
 

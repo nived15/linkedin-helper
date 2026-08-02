@@ -760,11 +760,34 @@ async def test_navigation_without_an_account_halts_but_writes_nothing(
 
 
 def test_no_tool_hand_rolls_the_login_wall_check_any_more():
-    source = (REPO_ROOT / "linkedin_browser_mcp.py").read_text(encoding="utf-8")
+    # MCP-03 (#26) moved the page-driving bodies out of linkedin_browser_mcp.py
+    # into linkedin_mcp/executors/, so this now scans both. Scanning only the
+    # server would have kept passing while the hand-rolled check was reborn one
+    # import away, and a second detection check that raises without flipping
+    # account state is invisible to a test that only watches the exception.
+    sources = {
+        path: path.read_text(encoding="utf-8")
+        for path in [REPO_ROOT / "linkedin_browser_mcp.py"]
+        + sorted((REPO_ROOT / "linkedin_mcp" / "executors").glob("*.py"))
+    }
 
-    assert "'login' in page.url" not in source
-    assert "'authwall' in page.url" not in source
-    assert "check_page_is_ours" in source
+    for path, source in sources.items():
+        assert "'login' in page.url" not in source, path
+        assert "'authwall' in page.url" not in source, path
+        assert '"login" in page.url' not in source, path
+        assert '"authwall" in page.url' not in source, path
+
+    callers = [
+        path
+        for path, source in sources.items()
+        if "await check_page_is_ours(" in source
+    ]
+    assert callers, "the shared login-wall check has no caller left anywhere"
+
+    helper = (
+        REPO_ROOT / "linkedin_mcp" / "executors" / "support.py"
+    ).read_text(encoding="utf-8")
+    assert "assert_session_alive" in helper
 
 
 # --- what a tool renders ------------------------------------------------------
