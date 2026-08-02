@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updatedAt": "2026-08-02T11:39:54.544Z",
+  "updatedAt": "2026-08-02T11:40:09.528Z",
   "tasks": {
     "CORE-01": {
       "status": "done",
@@ -98,9 +98,11 @@
       "prMerged": true
     },
     "SEQ-02": {
-      "status": "pending",
+      "status": "done",
       "notes": "",
-      "issueNumber": 20
+      "issueNumber": 20,
+      "prNumber": 43,
+      "prMerged": true
     },
     "SEQ-03": {
       "status": "pending",
