@@ -3,6 +3,10 @@
 LinkedIn caps direct profile loads at roughly 40 per 24 hours, so the default
 path types the lead's name into the global search bar and clicks the matching
 result. Direct loading stays available but has to be asked for explicitly.
+
+Every navigation in here ends with a check that LinkedIn served the page we
+asked for. The rules live in `linkedin_mcp.safety.detect`, so a challenge halts
+the run rather than being scraped as if it were a profile.
 """
 
 from __future__ import annotations
@@ -12,6 +16,8 @@ import re
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import unquote
+
+from linkedin_mcp.safety.detect import Detection, DetectionHalt, assert_page_clear
 
 from .humanize import Humanizer, get_humanizer
 from .selectors import selector_fallbacks
@@ -42,7 +48,23 @@ class NavigationError(RuntimeError):
 
 
 class SessionExpiredError(NavigationError):
-    """Raised when LinkedIn bounces the session to a login wall or challenge."""
+    """Raised when LinkedIn bounces the session to a login wall or challenge.
+
+    The detection rules and the account state change live in
+    `linkedin_mcp.safety.detect`. This stays the error navigation callers catch,
+    and it carries the typed `DetectionHalt` on `halt` so a caller that wants the
+    marker, the source and the raw evidence can read them off the detection
+    rather than parsing the message.
+    """
+
+    def __init__(self, message: str, halt: DetectionHalt | None = None) -> None:
+        self.halt = halt
+        super().__init__(message)
+
+    @property
+    def detection(self) -> Detection | None:
+        """The structured detection behind this error, when there was one."""
+        return None if self.halt is None else self.halt.detection
 
 
 @dataclass(frozen=True)
@@ -81,24 +103,32 @@ async def goto_profile(
     query: str | None = None,
     timeout: int = 15000,
     allow_direct_fallback: bool = False,
+    account_id: int | None = None,
 ) -> NavigationResult:
-    """Open a LinkedIn profile, using the search bar unless direct is requested."""
+    """Open a LinkedIn profile, using the search bar unless direct is requested.
+
+    Args:
+        account_id: Account this navigation runs as. Pass it so a challenge is
+            recorded against the right account. Left out, a challenge still
+            halts the navigation but nothing is written down, because guessing
+            the account would stop a session nobody challenged.
+    """
     slug = profile_slug(profile_url)
     pacer = humanizer or get_humanizer()
 
     if direct:
-        return await _direct_load(page, profile_url, slug, pacer, timeout)
+        return await _direct_load(page, profile_url, slug, pacer, timeout, account_id)
 
     search_query = query or slug_to_query(slug)
     try:
-        return await _search_bar_load(page, slug, search_query, pacer, timeout)
+        return await _search_bar_load(page, slug, search_query, pacer, timeout, account_id)
     except SessionExpiredError:
         raise
     except NavigationError as error:
         if not allow_direct_fallback:
             raise
         logger.warning("In-page navigation to %s failed (%s); falling back to a direct load", slug, error)
-        return await _direct_load(page, profile_url, slug, pacer, timeout)
+        return await _direct_load(page, profile_url, slug, pacer, timeout, account_id)
 
 
 async def _search_bar_load(
@@ -107,14 +137,16 @@ async def _search_bar_load(
     query: str,
     pacer: Humanizer,
     timeout: int,
+    account_id: int | None = None,
 ) -> NavigationResult:
-    await _ensure_linkedin_context(page, pacer, timeout)
+    await _ensure_linkedin_context(page, pacer, timeout, account_id)
 
     search_input = await _open_search_bar(page, pacer, timeout)
     await pacer.click(search_input)
     await pacer.type_text(search_input, query, clear=True)
     await _submit_search(page, search_input, pacer)
     await pacer.settle()
+    await _assert_authenticated(page, account_id)
 
     link = await _find_profile_link(page, slug, pacer)
     if link is None:
@@ -123,7 +155,7 @@ async def _search_bar_load(
         )
 
     await pacer.click(link)
-    await _wait_for_profile(page, slug, pacer, timeout)
+    await _wait_for_profile(page, slug, pacer, timeout, account_id)
     return NavigationResult(url=_current_url(page), method="search_bar", slug=slug, query=query)
 
 
@@ -133,6 +165,7 @@ async def _direct_load(
     slug: str,
     pacer: Humanizer,
     timeout: int,
+    account_id: int | None = None,
 ) -> NavigationResult:
     logger.warning(
         "Loading %s by direct URL; LinkedIn caps direct profile loads at about %d per 24h",
@@ -141,22 +174,35 @@ async def _direct_load(
     )
     await page.goto(profile_url, wait_until="domcontentloaded", timeout=timeout)
     await pacer.settle()
+    await _assert_authenticated(page, account_id)
     return NavigationResult(url=_current_url(page), method="direct", slug=slug, query="")
 
 
-async def _ensure_linkedin_context(page: Any, pacer: Humanizer, timeout: int) -> None:
+async def _ensure_linkedin_context(
+    page: Any,
+    pacer: Humanizer,
+    timeout: int,
+    account_id: int | None = None,
+) -> None:
     if "linkedin.com" in _current_url(page):
-        _assert_authenticated(page)
+        await _assert_authenticated(page, account_id)
         return
     await page.goto(FEED_URL, wait_until="domcontentloaded", timeout=timeout)
     await pacer.settle()
-    _assert_authenticated(page)
+    await _assert_authenticated(page, account_id)
 
 
-def _assert_authenticated(page: Any) -> None:
-    current = _current_url(page)
-    if any(marker in current for marker in ("/login", "authwall", "checkpoint")):
-        raise SessionExpiredError(f"Session expired: LinkedIn redirected to {current}")
+async def _assert_authenticated(page: Any, account_id: int | None = None) -> None:
+    """Halt when LinkedIn served an interstitial instead of the page we asked for.
+
+    This runs after every navigation in this module. The rules, the account state
+    change and the `safety_events` row all live in `linkedin_mcp.safety.detect`,
+    so a marker is added in one place and every navigation picks it up.
+    """
+    try:
+        await assert_page_clear(page, account_id=account_id)
+    except DetectionHalt as halt:
+        raise SessionExpiredError(f"Session expired: {halt}", halt=halt) from halt
 
 
 async def _open_search_bar(page: Any, pacer: Humanizer, timeout: int) -> Any:
@@ -195,7 +241,13 @@ async def _find_profile_link(page: Any, slug: str, pacer: Humanizer) -> Any:
     return None
 
 
-async def _wait_for_profile(page: Any, slug: str, pacer: Humanizer, timeout: int) -> None:
+async def _wait_for_profile(
+    page: Any,
+    slug: str,
+    pacer: Humanizer,
+    timeout: int,
+    account_id: int | None = None,
+) -> None:
     wait_for_url = getattr(page, "wait_for_url", None)
     if wait_for_url is not None:
         try:
@@ -203,6 +255,7 @@ async def _wait_for_profile(page: Any, slug: str, pacer: Humanizer, timeout: int
         except Exception as error:
             logger.debug("wait_for_url did not confirm /in/%s: %s", slug, error)
     await pacer.settle()
+    await _assert_authenticated(page, account_id)
 
     current = _current_url(page)
     if f"/in/{slug}" not in current:
