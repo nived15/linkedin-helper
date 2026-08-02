@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updatedAt": "2026-08-02T17:48:31.131Z",
+  "updatedAt": "2026-08-02T17:48:53.144Z",
   "tasks": {
     "CORE-01": {
       "status": "done",
@@ -140,9 +140,11 @@
       "prMerged": true
     },
     "MCP-03": {
-      "status": "pending",
+      "status": "done",
       "notes": "Deliberate design choice: enqueue, never execute inline.",
-      "issueNumber": 26
+      "issueNumber": 26,
+      "prNumber": 50,
+      "prMerged": true
     },
     "MCP-04": {
       "status": "pending",
