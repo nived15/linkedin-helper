@@ -158,6 +158,14 @@ mcp-linkedin-server/
 │   ├── network_growth.md        # Connection requests: pending → accepted/declined
 │   └── analytics/               # Weekly reports (dated JSON + markdown summary)
 │
+├── linkedin_mcp/                # Library the MCP tools are built on
+│   ├── audit/                   # Append-only actions_log
+│   ├── browser/                 # Humanised pacing, navigation, selector registry
+│   ├── core/                    # Config, database, migrations
+│   ├── leads/                   # Lead store, dedupe, blacklist, cache windows
+│   ├── safety/                  # The gate that answers before any action runs
+│   └── scrape/                  # Search result extraction (people, posts, groups)
+│
 └── .github/
     ├── copilot-instructions.md  # Always-on context for all Copilot agents
     ├── instructions/            # File-scoped rules (*.py and data/**)
@@ -224,6 +232,50 @@ accounts under two weeks old, the do-not-contact blacklist, and whether the same
 action already ran for the same lead. A refused action comes back as an ordinary
 tool result carrying a typed reason, and the refusal is written to `actions_log`
 with that reason, so a quiet night is explainable rather than mysterious.
+
+### Search result extraction
+
+`linkedin_mcp/scrape/` extracts People search results, post search results and
+group member lists. It is a plain Python API, not an MCP tool. Three entry
+points do the work:
+
+| Function | Surface | Budget spent |
+| --- | --- | --- |
+| `run_people_search` | `/search/results/people/` | `profile_search` |
+| `run_post_search` | `/search/results/content/` | `post_search` |
+| `run_group_member_extraction` | `/groups/<id>/members/` | `profile_search` |
+
+Filters are named parameters on `PeopleSearchFilters` and `PostSearchFilters`,
+validated on construction and encoded into LinkedIn's real query parameters. A
+raw query blob is never accepted, because a typo in a facet name reaches
+LinkedIn as a silently ignored parameter and the run quietly returns the wrong
+people. The People set covers keywords, connection degree, geography, current
+and past company, industry, school, title, first and last name, service category
+and profile language.
+
+LinkedIn stops serving results at roughly 1,000 per search, so a run stops there
+rather than looping. It also stops when the requested count is reached, when a
+page turns up nothing new, and when the safety gate refuses. All four are
+ordinary outcomes recorded in the returned `ScrapeSummary`, and none of them
+raises. The gate is asked before every page fetch, not once at the start, so a
+run that crosses a cap boundary halfway through stops at the boundary.
+
+Every result goes through the lead store's `harvest_leads`, which merges field by
+field so a thin search card never blanks a richer stored record, and refuses
+anyone on the do-not-contact blacklist. After a harvest the summary reports which
+leads are actually stale under the cache windows, so a deep scrape spends its
+much smaller profile budget on the leads that need it.
+
+Runs are resumable. A summary carries a cursor, the cursor is stored on the
+`harvest_runs` row, and handing it back resumes on the page the run stopped on.
+The page, clock, gate, audit writer and humanizer are all injectable, which is
+what a background runner needs to drive an extraction without a scheduler living
+in this package.
+
+Search result pages are loaded by URL rather than through the search bar. The
+roughly 40 per 24 hours cap applies to direct profile loads under `/in/`, not to
+result pages, and the query string is the only place the full filter set can be
+expressed.
 
 ---
 
