@@ -878,6 +878,94 @@ SELECTORS: dict[str, tuple[str, ...]] = {
         'button:has-text("Show more results")',
         'button:has-text("Load more")',
     ),
+    # --- SEQ-03 inbox and threads -----------------------------------------
+    # LinkedIn's messaging surface is two panes on one route: a lazily loaded
+    # conversation list on the left and the open conversation on the right.
+    # Clicking a list row swaps the right pane without a navigation, which is
+    # why the scanner reads both from the same page object.
+    #
+    # Verification status matches the rest of this file. None of these has been
+    # checked against a live logged-in session, so every group leads with an
+    # attribute or role hook and falls back to structure. A missing optional
+    # field reads as None rather than raising, and a thread whose messages
+    # cannot be read is reported as unreadable rather than guessed at.
+    "inbox_thread_list": (
+        "ul.msg-conversations-container__conversations-list",
+        'div[data-view-name="messaging-conversation-list"]',
+        "aside.msg-conversations-container",
+    ),
+    "inbox_thread_item": (
+        "li.msg-conversation-listitem",
+        'li[data-view-name="messaging-conversation-list-item"]',
+        "li.msg-conversations-container__convo-item",
+        'li:has(a[href*="/messaging/thread/"])',
+    ),
+    "inbox_thread_link": (
+        'a.msg-conversation-listitem__link[href*="/messaging/thread/"]',
+        'a[href*="/messaging/thread/"]',
+        "a.msg-conversation-listitem__link",
+    ),
+    "inbox_thread_participant_link": (
+        'a[href*="/in/"]',
+        "a.msg-conversation-listitem__link",
+        ".app-aware-link",
+    ),
+    "inbox_thread_participant_name": (
+        "h3.msg-conversation-listitem__participant-names",
+        ".msg-conversation-listitem__participant-names",
+        'span.truncate[aria-hidden="true"]',
+    ),
+    "inbox_thread_preview": (
+        "p.msg-conversation-card__message-snippet",
+        ".msg-conversation-card__message-snippet-body",
+        ".msg-conversation-listitem__message-snippet",
+    ),
+    "inbox_thread_timestamp": (
+        "time.msg-conversation-listitem__time-stamp",
+        ".msg-conversation-listitem__time-stamp",
+        "time",
+    ),
+    "inbox_thread_unread_badge": (
+        "span.msg-conversation-card__unread-count",
+        ".notification-badge--show",
+        'li[aria-label*="unread"]',
+    ),
+    "inbox_thread_load_more": (
+        "button.msg-conversations-container__see-more-btn",
+        "button.scaffold-finite-scroll__load-button",
+        'button:has-text("Load more conversations")',
+    ),
+    "inbox_message_list": (
+        "ul.msg-s-message-list-content",
+        'div[data-view-name="messaging-thread"]',
+        ".msg-s-message-list",
+    ),
+    "inbox_message_item": (
+        "li.msg-s-message-list__event",
+        'li[data-view-name="messaging-message"]',
+        "div.msg-s-event-listitem",
+        "li.msg-s-event-listitem",
+    ),
+    "inbox_message_sender_link": (
+        'a.msg-s-event-listitem__link[href*="/in/"]',
+        'a[href*="/in/"]',
+        ".msg-s-event-listitem__profile-picture-link",
+    ),
+    "inbox_message_sender_name": (
+        "span.msg-s-message-group__name",
+        ".msg-s-message-group__profile-link span",
+        ".msg-s-event-listitem__name",
+    ),
+    "inbox_message_body": (
+        "div.msg-s-event-listitem__body",
+        "p.msg-s-event-listitem__body",
+        ".msg-s-event__content .break-words",
+    ),
+    "inbox_message_timestamp": (
+        "time.msg-s-message-group__timestamp",
+        "time.msg-s-message-list__time-heading",
+        "time",
+    ),
     # --- Generic ----------------------------------------------------------
     "generic_button": (
         "button",
