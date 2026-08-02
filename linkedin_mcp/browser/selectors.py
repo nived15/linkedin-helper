@@ -468,6 +468,194 @@ SELECTORS: dict[str, tuple[str, ...]] = {
         "button.scaffold-finite-scroll__load-button",
         'button:has-text("Show more results")',
     ),
+    # --- SCRAPE-04 engagers and attendees ---------------------------------
+    # Post reactions live behind a modal, comments live inline under the post,
+    # and every other people list here is a lazily loaded column of profile
+    # links. Verification status matches the rest of this file: the leading
+    # entries are hypotheses written from LinkedIn's published markup, and the
+    # structural `:has(a[href*="/in/"])` fallbacks are what actually keeps a
+    # run alive when a class name churns.
+    "post_reactions_trigger": (
+        'button[data-reaction-details]',
+        "button.social-details-social-counts__count-value",
+        'button[aria-label*="reactions"]',
+        'button[aria-label*="reaction"]',
+    ),
+    "post_reactions_modal": (
+        "div.social-details-reactors-modal",
+        'div[role="dialog"]:has(a[href*="/in/"])',
+        "div.artdeco-modal",
+    ),
+    "post_reactor_item": (
+        "li.social-details-reactors-tab-body-list-item",
+        'div[role="dialog"] li:has(a[href*="/in/"])',
+        "li.artdeco-list__item",
+    ),
+    "post_reactor_profile_link": (
+        'a.social-details-reactors-tab-body-list-item__link[href*="/in/"]',
+        'a[href*="/in/"]',
+        ".app-aware-link",
+    ),
+    "post_reactor_name": (
+        'span.artdeco-entity-lockup__title span[aria-hidden="true"]',
+        ".artdeco-entity-lockup__title",
+        'a[href*="/in/"] span[aria-hidden="true"]',
+    ),
+    "post_reactor_headline": (
+        "div.artdeco-entity-lockup__subtitle",
+        ".artdeco-entity-lockup__subtitle",
+        ".social-details-reactors-tab-body-list-item__subtitle",
+    ),
+    "post_reactor_distance": (
+        "span.artdeco-entity-lockup__degree",
+        ".artdeco-entity-lockup__degree",
+        ".dist-value",
+    ),
+    "post_reactor_avatar": (
+        'div[role="dialog"] img.EntityPhoto-circle-3',
+        'div[role="dialog"] img[class*="evi-image"]',
+        "img.presence-entity__image",
+    ),
+    "post_reactions_load_more": (
+        'div[role="dialog"] button.scaffold-finite-scroll__load-button',
+        'div[role="dialog"] button:has-text("Load more")',
+        "button.scaffold-finite-scroll__load-button",
+    ),
+    "post_comment_item": (
+        "article.comments-comment-entity",
+        "article.comments-comment-item",
+        'article:has(a[href*="/in/"])',
+    ),
+    "post_comment_author_link": (
+        'a.comments-comment-meta__image-link[href*="/in/"]',
+        'a.comments-post-meta__image-link[href*="/in/"]',
+        'a[href*="/in/"]',
+    ),
+    "post_comment_author_name": (
+        'span.comments-comment-meta__description-title',
+        ".comments-post-meta__name-text",
+        '.comments-comment-meta__description-title span[aria-hidden="true"]',
+    ),
+    "post_comment_author_headline": (
+        "div.comments-comment-meta__description-subtitle",
+        ".comments-post-meta__headline",
+        ".comments-comment-item__postor-headline",
+    ),
+    "post_comment_author_avatar": (
+        "article.comments-comment-entity img.EntityPhoto-circle-3",
+        'article img[class*="evi-image"]',
+        "img.comments-comment-meta__image",
+    ),
+    "post_comments_load_more": (
+        "button.comments-comments-list__load-more-comments-button",
+        'button:has-text("Load more comments")',
+        'button:has-text("Show more comments")',
+    ),
+    "event_attendee_item": (
+        "li.event-attendee-list__item",
+        'ul[role="list"] > li:has(a[href*="/in/"])',
+        "li.artdeco-list__item",
+    ),
+    "event_attendee_profile_link": (
+        'a.event-attendee-list__attendee-link[href*="/in/"]',
+        'a[href*="/in/"]',
+        ".app-aware-link",
+    ),
+    "event_attendee_name": (
+        'span.artdeco-entity-lockup__title span[aria-hidden="true"]',
+        ".artdeco-entity-lockup__title",
+        'a[href*="/in/"] span[aria-hidden="true"]',
+    ),
+    "event_attendee_headline": (
+        "div.artdeco-entity-lockup__subtitle",
+        ".artdeco-entity-lockup__subtitle",
+        ".event-attendee-list__attendee-headline",
+    ),
+    "event_attendee_distance": (
+        "span.artdeco-entity-lockup__degree",
+        ".artdeco-entity-lockup__degree",
+        ".dist-value",
+    ),
+    "event_attendee_load_more": (
+        "button.scaffold-finite-scroll__load-button",
+        'button:has-text("Show more results")',
+        'button:has-text("Load more")',
+    ),
+    "company_employee_item": (
+        "li.org-people-profile-card__profile-card-spacing",
+        "div.org-people-profile-card",
+        'li:has(a[href*="/in/"])',
+    ),
+    "company_employee_profile_link": (
+        'a.org-people-profile-card__profile-title-link[href*="/in/"]',
+        'a[href*="/in/"]',
+        ".app-aware-link",
+    ),
+    "company_employee_name": (
+        "div.org-people-profile-card__profile-title",
+        ".artdeco-entity-lockup__title",
+        'a[href*="/in/"] span[aria-hidden="true"]',
+    ),
+    "company_employee_headline": (
+        "div.org-people-profile-card__profile-info",
+        ".artdeco-entity-lockup__subtitle",
+        ".lt-line-clamp--multi-line",
+    ),
+    "company_employee_load_more": (
+        "button.scaffold-finite-scroll__load-button",
+        'button:has-text("Show more results")',
+        'button:has-text("Load more")',
+    ),
+    "connection_item": (
+        "li.mn-connection-card",
+        'ul[role="list"] > li:has(a[href*="/in/"])',
+        "li.artdeco-list__item",
+    ),
+    "connection_profile_link": (
+        'a.mn-connection-card__link[href*="/in/"]',
+        'a[href*="/in/"]',
+        ".app-aware-link",
+    ),
+    "connection_name": (
+        "span.mn-connection-card__name",
+        ".artdeco-entity-lockup__title",
+        'a[href*="/in/"] span[aria-hidden="true"]',
+    ),
+    "connection_headline": (
+        "span.mn-connection-card__occupation",
+        ".artdeco-entity-lockup__subtitle",
+        ".mn-connection-card__details .t-14",
+    ),
+    "connection_load_more": (
+        "button.scaffold-finite-scroll__load-button",
+        'button:has-text("Show more results")',
+        'button:has-text("Load more")',
+    ),
+    "follower_item": (
+        "li.follows-recommendation-card",
+        'ul[role="list"] > li:has(a[href*="/in/"])',
+        "li.artdeco-list__item",
+    ),
+    "follower_profile_link": (
+        'a.follows-recommendation-card__link[href*="/in/"]',
+        'a[href*="/in/"]',
+        ".app-aware-link",
+    ),
+    "follower_name": (
+        'span.artdeco-entity-lockup__title span[aria-hidden="true"]',
+        ".artdeco-entity-lockup__title",
+        'a[href*="/in/"] span[aria-hidden="true"]',
+    ),
+    "follower_headline": (
+        "div.artdeco-entity-lockup__subtitle",
+        ".artdeco-entity-lockup__subtitle",
+        ".follows-recommendation-card__headline",
+    ),
+    "follower_load_more": (
+        "button.scaffold-finite-scroll__load-button",
+        'button:has-text("Show more results")',
+        'button:has-text("Load more")',
+    ),
     # --- Generic ----------------------------------------------------------
     "generic_button": (
         "button",
