@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updatedAt": "2026-08-02T09:54:35.065Z",
+  "updatedAt": "2026-08-02T09:55:12.944Z",
   "tasks": {
     "CORE-01": {
       "status": "done",
@@ -31,9 +31,11 @@
       "prMerged": true
     },
     "CORE-05": {
-      "status": "pending",
+      "status": "done",
       "notes": "Added from the codebase audit, not in the original brief.",
-      "issueNumber": 9
+      "issueNumber": 9,
+      "prNumber": 40,
+      "prMerged": true
     },
     "DB-01": {
       "status": "done",
