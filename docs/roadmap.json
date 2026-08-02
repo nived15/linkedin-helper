@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updatedAt": "2026-08-02T16:07:41.914Z",
+  "updatedAt": "2026-08-02T16:17:08.859Z",
   "tasks": {
     "CORE-01": {
       "status": "done",
@@ -119,9 +119,11 @@
       "prMerged": true
     },
     "SEQ-05": {
-      "status": "pending",
+      "status": "done",
       "notes": "Added from the benchmark analysis. ICP filtering costs zero LinkedIn actions and protects scarce daily invites.",
-      "issueNumber": 23
+      "issueNumber": 23,
+      "prNumber": 48,
+      "prMerged": true
     },
     "MCP-01": {
       "status": "pending",
