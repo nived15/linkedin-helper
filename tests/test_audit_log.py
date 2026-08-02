@@ -125,6 +125,84 @@ def unaudited_tools_in(source: str) -> list[str]:
     )
 
 
+# MCP-04 (#27) ---------------------------------------------------------------
+#
+# `mcp_tools_in` keys on the string "mcp.tool", so the twelve `@mcp.resource`
+# functions added in #27 were invisible to this file. That silence is the thing
+# worth fixing. It read as "resources are audited" when it actually meant "this
+# guard has never looked at a resource", and those two states are impossible to
+# tell apart from the outside.
+#
+# The decision, written down so it is reviewable rather than accidental:
+# resources do NOT carry `@audit_linkedin_action`, on purpose.
+#
+# `actions_log` is not a log of everything that happened. It is the ledger the
+# rate limiter counts. `linkedin_mcp.safety.daily_budget` and `weekly_budget`
+# derive `used` and `remaining` straight from `count_actions_in_window`, so a
+# row in that table is a claim that some of today's LinkedIn budget was spent.
+# A resource spends none: it opens no browser (`tests/test_actions.py` fails the
+# build if one ever tries), touches no LinkedIn account, and changes nothing.
+#
+# Auditing them would therefore be actively harmful, not merely noisy. Every
+# read of `linkedin://safety/today` would write a row that made the next read of
+# `linkedin://safety/today` report less headroom than the account really has, a
+# monitoring dashboard polling once a minute would starve the worker of budget
+# it never used, and the resource whose entire job is reporting the budget would
+# be the one corrupting it.
+#
+# What is checked below instead: that resources exist and are found, that none
+# of them carries the decorator (so the exemption stays deliberate), and that
+# none of them calls anything that spends a LinkedIn action. The runtime half of
+# that promise is in `tests/test_resources.py`, which reads all twelve through
+# the shipped server and asserts `actions_log` is still empty afterwards.
+
+
+def mcp_resources_in(source: str) -> dict[str, list[str]]:
+    """Return every `@mcp.resource()` function in a module, with its decorators."""
+    tree = ast.parse(source)
+    return {
+        node.name: decorator_names(node)
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.AsyncFunctionDef, ast.FunctionDef))
+        and "mcp.resource" in decorator_names(node)
+    }
+
+
+ACTION_SPENDING_CALLS = frozenset(
+    {
+        "audit_linkedin_action",
+        "enqueue_action",
+        "enqueue_job",
+        "claim_next_job",
+        "run_job",
+        "execute_action",
+        "send_connection_request",
+        "record_outcome",
+    }
+)
+"""Names that mean a LinkedIn action was taken or queued, not merely read.
+
+`record` is deliberately absent: it is a common enough method name that
+matching it would flag unrelated code, and the runtime assertion in
+`tests/test_resources.py` covers the case this would.
+"""
+
+
+def resource_modules() -> dict[str, dict[str, list[str]]]:
+    """Every shipped module that registers MCP resources, keyed by path."""
+    modules: dict[str, dict[str, list[str]]] = {}
+    for path in scanned_files():
+        if path.suffix != ".py":
+            continue
+        relative = path.relative_to(REPO_ROOT)
+        if relative.parts and relative.parts[0] == "tests":
+            continue
+        resources = mcp_resources_in(path.read_text(encoding="utf-8"))
+        if resources:
+            modules[relative.as_posix()] = resources
+    return modules
+
+
 def tool_modules() -> dict[str, dict[str, list[str]]]:
     """Return every shipped module that registers MCP tools, keyed by path.
 
@@ -853,3 +931,136 @@ def test_read_only_tools_are_audited_too():
     }
 
     assert read_tools.issubset(audited)
+
+
+# MCP-04 (#27) ---------------------------------------------------------------
+
+
+def test_the_instrumentation_guard_can_see_mcp_resources_at_all():
+    """The guard knows resources exist. It used to have no idea.
+
+    `mcp_tools_in` matches on "mcp.tool", so every `@mcp.resource` slipped past
+    it, and this whole file would have stayed green whatever those twelve
+    functions did. The count is asserted against the source so that deleting
+    the resource package cannot quietly turn the two tests below into no-ops.
+    """
+    modules = resource_modules()
+
+    assert modules, "no module registers MCP resources; the walk found nothing"
+    assert "linkedin_mcp/resources/server.py" in modules
+    found = {name for resources in modules.values() for name in resources}
+    assert len(found) >= 12, sorted(found)
+
+
+def test_mcp_resources_are_deliberately_exempt_from_the_audit_decorator():
+    """Resources carry no `@audit_linkedin_action`, and that is the intent.
+
+    The reasoning is in the block comment above `mcp_resources_in`, and the
+    short version is that `actions_log` is the rate limiter's ledger rather than
+    a diary. A read that spends no LinkedIn budget must not write a row that
+    claims it did, or `linkedin://safety/today` ends up reporting headroom that
+    its own readers consumed.
+
+    This is written as an assertion rather than left implicit so that anyone who
+    disagrees has something concrete to delete, and so that a resource which
+    quietly grew the decorator has to argue with a failing test first.
+    """
+    audited = {
+        f"{module}::{name}"
+        for module, resources in resource_modules().items()
+        for name, decorators in resources.items()
+        if "audit_linkedin_action" in decorators
+    }
+
+    assert audited == set(), (
+        "these MCP resources are audited; a resource spends no LinkedIn budget, "
+        "so an actions_log row from one corrupts the budget arithmetic that "
+        "linkedin://safety/today reports:\n  " + "\n  ".join(sorted(audited))
+    )
+
+
+def test_no_mcp_resource_takes_a_linkedin_action():
+    """The exemption is only safe while resources stay reads.
+
+    Exempting resources from the audit decorator is defensible because they do
+    nothing worth auditing. That premise needs its own guard, otherwise the
+    exemption becomes a hole: a resource that queued a connection request would
+    be both unaudited and unnoticed.
+
+    The walk follows helpers defined in the same module, for the same reason
+    `tests/test_actions.py` does. A resource that called `_enqueue()` which
+    called `enqueue_action()` would look innocent from the decorated body.
+    """
+    offenders: dict[str, str] = {}
+
+    for module in resource_modules():
+        path = REPO_ROOT / module
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        local = {
+            node.name: node
+            for node in ast.walk(tree)
+            if isinstance(node, (ast.AsyncFunctionDef, ast.FunctionDef))
+        }
+
+        def spends(node: ast.AST, seen: set[str]) -> str | None:
+            for inner in ast.walk(node):
+                if not isinstance(inner, ast.Call):
+                    continue
+                callee = inner.func
+                name = (
+                    callee.id
+                    if isinstance(callee, ast.Name)
+                    else callee.attr
+                    if isinstance(callee, ast.Attribute)
+                    else None
+                )
+                if name is None:
+                    continue
+                if name in ACTION_SPENDING_CALLS:
+                    return name
+                if name in seen or name not in local:
+                    continue
+                seen.add(name)
+                if (deeper := spends(local[name], seen)) is not None:
+                    return f"{name}() -> {deeper}"
+            return None
+
+        for name in mcp_resources_in(path.read_text(encoding="utf-8")):
+            if (why := spends(local[name], {name})) is not None:
+                offenders[f"{module}::{name}"] = why
+
+    assert offenders == {}, (
+        "these MCP resources take or queue a LinkedIn action; a resource is a "
+        "read, and one that acts must be a tool with an audit decorator:\n  "
+        + "\n  ".join(f"{where}: {why}" for where, why in sorted(offenders.items()))
+    )
+
+
+def test_the_resource_exemption_guard_would_catch_an_acting_resource():
+    """The two tests above are not vacuous.
+
+    A resource that carried the decorator is found, and a resource that queued
+    an action through a helper is found. Both are checked against the same
+    functions the real guards use.
+    """
+    audited_resource = (
+        "@mcp.resource('linkedin://campaigns')\n"
+        "@audit_linkedin_action('profile_view')\n"
+        "async def campaigns_resource():\n"
+        "    return '{}'\n"
+    )
+    found = mcp_resources_in(audited_resource)
+    assert list(found) == ["campaigns_resource"]
+    assert "audit_linkedin_action" in found["campaigns_resource"]
+
+    nested = (
+        "def register(mcp):\n"
+        "    @mcp.resource('linkedin://campaigns')\n"
+        "    async def nested_resource():\n"
+        "        return '{}'\n"
+    )
+    assert list(mcp_resources_in(nested)) == ["nested_resource"]
+
+    plain_tool = "@mcp.tool()\nasync def a_tool():\n    return {}\n"
+    assert mcp_resources_in(plain_tool) == {}
+    assert mcp_tools_in(audited_resource) == {}
