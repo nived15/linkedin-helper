@@ -99,6 +99,54 @@ def decorator_names(node: ast.AST) -> list[str]:
     return names
 
 
+def mcp_tools_in(source: str) -> dict[str, list[str]]:
+    """Return every `@mcp.tool()` function in a module, with its decorators.
+
+    `ast.walk` reaches nested definitions, so a tool registered inside a
+    `register_*(mcp)` function counts exactly like one at module level. That
+    matters: MCP-02 registers eleven tools that way and SEQ-05 will register
+    more, and a guard that only saw module level would miss all of them.
+    """
+    tree = ast.parse(source)
+    return {
+        node.name: decorator_names(node)
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.AsyncFunctionDef, ast.FunctionDef))
+        and "mcp.tool" in decorator_names(node)
+    }
+
+
+def unaudited_tools_in(source: str) -> list[str]:
+    """Return the tools in a module that carry no `@audit_linkedin_action`."""
+    return sorted(
+        name
+        for name, decorators in mcp_tools_in(source).items()
+        if "audit_linkedin_action" not in decorators
+    )
+
+
+def tool_modules() -> dict[str, dict[str, list[str]]]:
+    """Return every shipped module that registers MCP tools, keyed by path.
+
+    Scans the whole repository rather than the entry point alone. A tool
+    registered from any module is part of the MCP surface and needs an audit
+    row, and the surface is now spread across packages: `linkedin_mcp/tools/`
+    for MCP-02 and `linkedin_mcp/drafts/` for SEQ-05. Tests are excluded
+    because they ship nothing.
+    """
+    modules: dict[str, dict[str, list[str]]] = {}
+    for path in scanned_files():
+        if path.suffix != ".py":
+            continue
+        relative = path.relative_to(REPO_ROOT)
+        if relative.parts and relative.parts[0] == "tests":
+            continue
+        tools = mcp_tools_in(path.read_text(encoding="utf-8"))
+        if tools:
+            modules[relative.as_posix()] = tools
+    return modules
+
+
 def seed(audit: AuditLog, account_id: int, action_type: str, outcome, minutes_ago: int) -> int:
     return audit.record(
         account_id,
@@ -715,23 +763,75 @@ def test_batch_comment_helper_records_every_item(audit, account_id):
 
 
 def test_every_linkedin_mcp_tool_is_instrumented():
-    source = (REPO_ROOT / "linkedin_browser_mcp.py").read_text(encoding="utf-8")
-    tree = ast.parse(source)
+    """Every `@mcp.tool()` in the repository, in any module, is audited.
 
-    tools = {
-        node.name: decorator_names(node)
-        for node in ast.walk(tree)
-        if isinstance(node, (ast.AsyncFunctionDef, ast.FunctionDef))
-        and "mcp.tool" in decorator_names(node)
+    Reading only `linkedin_browser_mcp.py` used to be enough because that was
+    the only file registering tools. It is not any more, and the narrow version
+    of this test passed vacuously for a tool defined anywhere else. An
+    unaudited tool is a LinkedIn action with no trail, which breaks the
+    human-in-the-loop rule the whole project runs on, so the scan is now the
+    whole tree.
+    """
+    modules = tool_modules()
+
+    assert "linkedin_browser_mcp.py" in modules, "the entry point registers no tools"
+    unaudited = {
+        module: unaudited
+        for module, tools in modules.items()
+        if (unaudited := sorted(
+            name
+            for name, decorators in tools.items()
+            if "audit_linkedin_action" not in decorators
+        ))
+    }
+    assert unaudited == {}
+
+
+def test_the_instrumentation_guard_would_catch_an_unaudited_tool():
+    """The guard is not vacuous: feed it a bad module and it says so.
+
+    Without this, a refactor that broke `mcp_tools_in` would turn the guard
+    above into a test that always passes, and nobody would notice until an
+    action went out with no audit row.
+    """
+    audited = (
+        "@mcp.tool()\n"
+        "@audit_linkedin_action('profile_view')\n"
+        "async def good_tool():\n"
+        "    return {}\n"
+    )
+    unaudited = "@mcp.tool()\nasync def bad_tool():\n    return {}\n"
+    nested = (
+        "def register(mcp):\n"
+        "    @mcp.tool()\n"
+        "    async def nested_tool():\n"
+        "        return {}\n"
+    )
+
+    assert unaudited_tools_in(audited) == []
+    assert unaudited_tools_in(unaudited) == ["bad_tool"]
+    assert unaudited_tools_in(audited + unaudited) == ["bad_tool"]
+    assert unaudited_tools_in(nested) == ["nested_tool"]
+    assert sorted(mcp_tools_in(audited + unaudited)) == ["bad_tool", "good_tool"]
+
+
+def test_the_instrumentation_guard_covers_more_than_the_entry_point():
+    """Tools registered outside `linkedin_browser_mcp.py` are inside the guard.
+
+    MCP-02 put eleven tools in `linkedin_mcp/tools/`. If this ever drops back
+    to one module, the scan has been narrowed and the packages that register
+    tools are no longer protected.
+    """
+    modules = tool_modules()
+    beyond_entry_point = {
+        module: sorted(tools)
+        for module, tools in modules.items()
+        if module != "linkedin_browser_mcp.py"
     }
 
-    assert tools, "no MCP tools found in linkedin_browser_mcp.py"
-    unaudited = [
-        name
-        for name, decorators in tools.items()
-        if "audit_linkedin_action" not in decorators
-    ]
-    assert unaudited == []
+    assert beyond_entry_point
+    registered = {name for tools in modules.values() for name in tools}
+    assert {"harvest_people_search", "harvest_status", "lead_search"} <= registered
 
 
 def test_read_only_tools_are_audited_too():

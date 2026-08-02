@@ -44,6 +44,22 @@ These are the tools exposed by the LinkedIn MCP server (`linkedin` server name):
 | `search_linkedin_posts` | Search for posts by keyword with engagement data |
 | `comment_on_approved_posts` | Batch comment on a list of approved posts |
 | `close_browser` | Close the persistent browser session |
+| `harvest_people_search` | Queue a People search harvest, returns a job id |
+| `harvest_post_engagers` | Queue a harvest of a post's likers and commenters |
+| `harvest_group_members` | Queue a harvest of a group's member list |
+| `harvest_event_attendees` | Queue a harvest of an event's attendee list |
+| `harvest_company_employees` | Queue a harvest of a company's people tab |
+| `harvest_connections` | Queue a harvest of your own connection list |
+| `harvest_import_csv` | Queue an import of a CSV of people |
+| `harvest_status` | Report progress for a queued or running harvest |
+| `lead_search` | Search stored leads by text and tags |
+| `lead_get` | Read one stored lead with its tags and custom fields |
+| `lead_export_csv` | Export stored leads to a re-importable CSV |
+
+The `harvest_*` tools queue work rather than scraping. They return a job id
+straight away and a background runner does the fetching, so a large harvest
+never blocks the MCP client. There is no `harvest_sales_nav`: Sales Navigator
+extraction needs a paid subscription and is descoped.
 
 ## Rules
 

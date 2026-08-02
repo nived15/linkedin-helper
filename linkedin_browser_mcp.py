@@ -31,6 +31,7 @@ from linkedin_mcp.browser.selectors import (
 from linkedin_mcp.browser.session import BrowserSession, load_cookies, save_cookies
 from linkedin_mcp.core.config import profile_view_action
 from linkedin_mcp.safety import DetectionHalt, assert_page_clear, guard_action
+from linkedin_mcp.tools import register_lead_tools
 
 # Set up logging to stderr only
 logging.basicConfig(
@@ -52,6 +53,13 @@ else:
 
 # Create MCP server
 mcp = FastMCP("linkedin")
+
+# MCP-02 (#25) registers the eleven lead extraction and CRM tools from
+# linkedin_mcp.tools. They live in their own package because they open no
+# browser: the harvest tools enqueue a job for SEQ-04's runner and the CRM
+# tools read the local database. Registering them here rather than importing
+# this module from there keeps the dependency one way.
+register_lead_tools(mcp)
 
 def report_progress(ctx, current, total, message=None):
     """Helper function to report progress with proper validation"""
