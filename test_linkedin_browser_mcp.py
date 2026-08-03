@@ -144,7 +144,7 @@ async def test_browser_session(monkeypatch):
         assert "linkedin_" in str(BrowserSession._driver.user_data_dir)
 
         page = await session.new_page("https://www.linkedin.com/feed/")
-        assert page.goto_calls[0]["wait_until"] == "networkidle"
+        assert page.goto_calls[0]["wait_until"] == "domcontentloaded"
 
     await BrowserSession.shutdown()
 

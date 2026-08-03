@@ -293,7 +293,14 @@ async def profile_search(ctx: ActionContext) -> ActionResult:
     search_url = (
         f"https://www.linkedin.com/search/results/people/?keywords={quote(query)}&start={start}"
     )
-    page = await _open(ctx, search_url)
+    # Navigate via feed first so LinkedIn sees us arriving through the site
+    # rather than jumping directly to a search URL, which triggers bot checks.
+    page = await _open(ctx, "https://www.linkedin.com/feed/")
+    halted = await _halted(page)
+    if halted:
+        return ActionResult.failed(halted["message"], **halted)
+    await settle()
+    await page.goto(search_url, wait_until="domcontentloaded", timeout=60000)
     halted = await _halted(page)
     if halted:
         return ActionResult.failed(halted["message"], **halted)
