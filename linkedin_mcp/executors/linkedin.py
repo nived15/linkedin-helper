@@ -287,13 +287,20 @@ async def profile_search(ctx: ActionContext) -> ActionResult:
     """Search People. Was `search_linkedin_profiles`."""
     query = str(ctx.payload.get("query") or "").strip()
     count = int(ctx.payload.get("count") or 5)
-    page = max(1, int(ctx.payload.get("page") or 1))
-    start = (page - 1) * 10
+    page_num = max(1, int(ctx.payload.get("page") or 1))
+    start = (page_num - 1) * 10
 
     search_url = (
         f"https://www.linkedin.com/search/results/people/?keywords={quote(query)}&start={start}"
     )
-    page = await _open(ctx, search_url)
+    # Navigate via feed first so LinkedIn sees us arriving through the site
+    # rather than jumping directly to a search URL, which triggers bot checks.
+    page = await _open(ctx, "https://www.linkedin.com/feed/")
+    halted = await _halted(page)
+    if halted:
+        return ActionResult.failed(halted["message"], **halted)
+    await settle()
+    await page.goto(search_url, wait_until="domcontentloaded", timeout=60000)
     halted = await _halted(page)
     if halted:
         return ActionResult.failed(halted["message"], **halted)
@@ -344,8 +351,8 @@ async def profile_search(ctx: ActionContext) -> ActionResult:
             "profiles": profiles,
             "count": len(profiles),
             "query": query,
-            "page": page,
-            "next_page": page + 1,
+            "page": page_num,
+            "next_page": page_num + 1,
         },
         target=query,
         count=len(profiles),

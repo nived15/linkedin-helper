@@ -257,6 +257,21 @@ async def run(args: argparse.Namespace, conn: sqlite3.Connection) -> int:
             ", ".join(sorted(executors)),
         )
 
+    # Derive the browser profile seed from the account's label (the email /
+    # username stored at account creation time), falling back to the env var and
+    # then to the string account-id only as a last resort. Using the integer id
+    # would land in a different profile directory than the login tool, which
+    # resolves its seed from LINKEDIN_USERNAME, leaving the worker with an empty
+    # profile and no session on every start.
+    account_row = conn.execute(
+        "SELECT label FROM accounts WHERE id = ?", (int(args.account),)
+    ).fetchone()
+    account_label = None
+    if account_row is not None:
+        raw = account_row[0] if isinstance(account_row, tuple) else account_row["label"]
+        account_label = (raw or "").strip() or None
+    account_seed = account_label or os.getenv("LINKEDIN_USERNAME", "").strip() or str(args.account)
+
     worker = Worker(
         conn,
         WorkerConfig(
@@ -272,7 +287,7 @@ async def run(args: argparse.Namespace, conn: sqlite3.Connection) -> int:
         registry=ActionRegistry(executors),
         browser_supplier=build_browser_supplier(
             headless=args.headless,
-            account_seed=str(args.account),
+            account_seed=account_seed,
             enabled=not args.no_browser,
         ),
     )

@@ -351,7 +351,7 @@ class PlaywrightChromiumDriver:
         if self.page is None or self.page.is_closed():
             self.page = await self.context.new_page()
         if url:
-            await self.page.goto(url, wait_until="networkidle", timeout=30000)
+            await self.page.goto(url, wait_until="domcontentloaded", timeout=60000)
         return self.page
 
     async def close(self):
