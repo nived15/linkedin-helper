@@ -351,7 +351,12 @@ class PlaywrightChromiumDriver:
         if self.page is None or self.page.is_closed():
             self.page = await self.context.new_page()
         if url:
-            await self.page.goto(url, wait_until="networkidle", timeout=30000)
+            try:
+                # LinkedIn's SPA never truly reaches networkidle on heavy pages;
+                # try with a generous timeout first, then fall back to 'load'.
+                await self.page.goto(url, wait_until="networkidle", timeout=60000)
+            except Exception:
+                await self.page.goto(url, wait_until="load", timeout=60000)
         return self.page
 
     async def close(self):
