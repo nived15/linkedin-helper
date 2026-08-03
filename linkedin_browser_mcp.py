@@ -163,8 +163,16 @@ async def close_browser(ctx: Context) -> dict:
 @mcp.tool()
 @audit_linkedin_action("login", target="username")
 async def login_linkedin(username: str | None = None, password: str | None = None, ctx: Context | None = None) -> dict:
-    """Open LinkedIn login page in browser for manual login.
-    Username and password are optional - if not provided, user will need to enter them manually."""
+    """Open LinkedIn in the browser for manual login. Only needed once.
+
+    After a successful login the browser profile is saved to `sessions/` and
+    reused automatically on every future run. You do not need to call this again
+    unless LinkedIn invalidates the session server-side or the `sessions/`
+    directory is deleted. The persistent profile has no fixed expiry — 30 days,
+    3 months, or longer all work without re-login.
+
+    Username and password are optional — if not provided the user enters them
+    manually in the browser window."""
     
     logger.info("Starting LinkedIn login with browser for manual login")
     
@@ -222,12 +230,18 @@ async def login_linkedin(username: str | None = None, password: str | None = Non
 @mcp.tool()
 @audit_linkedin_action("login_secure")
 async def login_linkedin_secure(ctx: Context | None = None) -> dict:
-    """Open LinkedIn login page in browser for manual login using environment credentials as default values.
-    
-    Optional environment variables:
-    - LINKEDIN_USERNAME: Your LinkedIn email/username (will be pre-filled if provided)
-    - LINKEDIN_PASSWORD: Your LinkedIn password (will be pre-filled if provided)
-    
+    """Log in using credentials from the environment. Only needed once.
+
+    Reads LINKEDIN_USERNAME and LINKEDIN_PASSWORD from the .env file and
+    pre-fills the LinkedIn login form. After a successful login the browser
+    profile is saved to `sessions/` and reused automatically — no re-login is
+    required after 3 days, 30 days, or longer. Only call again if LinkedIn
+    invalidates the session or the `sessions/` directory is deleted.
+
+    Required environment variables:
+    - LINKEDIN_USERNAME: Your LinkedIn email/username
+    - LINKEDIN_PASSWORD: Your LinkedIn password
+
     Returns:
         dict: Login status and message
     """
@@ -366,7 +380,8 @@ async def interact_with_linkedin_post(post_url: str, ctx: Context, action: str =
             "message": f"Invalid action. Choose from: {', '.join(valid_actions)}"
         }
 
-    refusal = guard_action(f"post_{action}", approved=True)
+    approval_required = action in {"comment", "share"}
+    refusal = guard_action(f"post_{action}", approved=approval_required)
     if refusal:
         return refusal
 
@@ -375,7 +390,7 @@ async def interact_with_linkedin_post(post_url: str, ctx: Context, action: str =
         # Refused here rather than quietly downgraded to a read, which is what
         # the inline version did when the comment was missing.
         fields["comment"] = comment
-    return queue_linkedin_action(f"post_{action}", approved=True, **fields)
+    return queue_linkedin_action(f"post_{action}", approved=approval_required, **fields)
 
 
 @mcp.tool()
