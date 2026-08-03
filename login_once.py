@@ -17,6 +17,10 @@ import time
 
 load_dotenv(Path(__file__).parent / '.env')
 
+# Username field selectors, tried in order
+USERNAME_SELECTORS = ['#username', 'input[name="session_key"]', 'input[type="email"]']
+PASSWORD_SELECTORS = ['#password', 'input[name="session_password"]', 'input[type="password"]']
+
 
 def get_or_create_encryption_key() -> bytes:
     key = os.getenv('COOKIE_ENCRYPTION_KEY', '').strip()
@@ -44,6 +48,19 @@ def get_or_create_encryption_key() -> bytes:
     return new_key
 
 
+async def try_fill(page, selectors, value, label):
+    """Try each selector in turn, return True on first success."""
+    for sel in selectors:
+        try:
+            await page.wait_for_selector(sel, timeout=5000, state='visible')
+            await page.fill(sel, value)
+            print(f'[info] Filled {label} using {sel}')
+            return True
+        except Exception:
+            continue
+    return False
+
+
 async def login():
     username = os.getenv('LINKEDIN_USERNAME', '').strip()
     password = os.getenv('LINKEDIN_PASSWORD', '').strip()
@@ -56,34 +73,71 @@ async def login():
     sessions_dir.mkdir(exist_ok=True)
 
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=False, slow_mo=100)
-        context = await browser.new_context(viewport={'width': 1280, 'height': 800})
+        browser = await p.chromium.launch(
+            headless=False,
+            slow_mo=80,
+            args=['--start-maximized', '--disable-blink-features=AutomationControlled'],
+        )
+        context = await browser.new_context(
+            viewport={'width': 1280, 'height': 800},
+            user_agent=(
+                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+                'AppleWebKit/537.36 (KHTML, like Gecko) '
+                'Chrome/138.0.7204.169 Safari/537.36'
+            ),
+        )
         page = await context.new_page()
 
         print('[info] Navigating to LinkedIn login...')
-        await page.goto('https://www.linkedin.com/login', wait_until='domcontentloaded')
+        try:
+            await page.goto(
+                'https://www.linkedin.com/login',
+                wait_until='domcontentloaded',
+                timeout=60_000,
+            )
+        except Exception as e:
+            print(f'[warning] Navigation warning (continuing): {e}')
 
-        if 'feed' in page.url:
+        # Allow page to settle
+        await asyncio.sleep(3)
+
+        if 'feed' in page.url or 'mynetwork' in page.url or 'jobs' in page.url:
             print('[info] Already logged in!')
         else:
-            try:
-                await page.fill('#username', username)
-                await page.fill('#password', password)
+            filled_user = await try_fill(page, USERNAME_SELECTORS, username, 'username')
+            filled_pass = await try_fill(page, PASSWORD_SELECTORS, password, 'password')
+
+            if filled_user and filled_pass:
                 print('[info] Credentials pre-filled. Submitting...')
-                await page.click('button[type="submit"]')
-            except Exception as e:
-                print(f'[warning] Could not auto-fill: {e}. Please log in manually in the browser.')
+                try:
+                    await page.click('button[type="submit"]', timeout=5000)
+                except Exception:
+                    await page.keyboard.press('Enter')
+            else:
+                print('[warning] Could not auto-fill credentials. Please log in manually in the browser window.')
 
-            print('[info] Waiting for LinkedIn feed (up to 5 minutes). Complete any 2FA in the browser...')
-            try:
-                await page.wait_for_url('**/feed/**', timeout=300_000)
-                print('[success] Logged in!')
-            except Exception as e:
-                print(f'[error] Login timed out or failed: {e}')
-                await browser.close()
-                sys.exit(1)
+        print('[info] Waiting up to 5 minutes for LinkedIn feed. Complete any 2FA now...')
+        try:
+            # Wait until we land on a page that is NOT the login page
+            await page.wait_for_function(
+                """() => {
+                    const url = window.location.href;
+                    return url.includes('/feed') ||
+                           url.includes('/mynetwork') ||
+                           url.includes('/jobs') ||
+                           url.includes('/messaging') ||
+                           (url.includes('linkedin.com/in/') && !url.includes('/login'));
+                }""",
+                timeout=300_000,
+                polling=2000,
+            )
+            print('[success] Logged in! Current page:', page.url)
+        except Exception as e:
+            print(f'[error] Login timed out or failed: {e}')
+            await browser.close()
+            sys.exit(1)
 
-        # Save session
+        # Save session cookies
         cookies = await context.cookies()
         cookie_data = {'timestamp': int(time.time()), 'cookies': cookies}
         key = get_or_create_encryption_key()

@@ -45,6 +45,9 @@ wheels/
 *.swp
 *.swo
 
+# Local MCP server config (contains absolute paths)
+.mcp.json
+
 # OS
 .DS_Store
 Thumbs.db
