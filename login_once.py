@@ -98,9 +98,6 @@ async def login():
         except Exception as e:
             print(f'[warning] Navigation warning (continuing): {e}')
 
-        # Allow page to settle
-        await asyncio.sleep(3)
-
         if 'feed' in page.url or 'mynetwork' in page.url or 'jobs' in page.url:
             print('[info] Already logged in!')
         else:
