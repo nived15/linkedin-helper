@@ -59,6 +59,15 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+# Load .env before any module that reads env vars (LINKEDIN_USERNAME,
+# COOKIE_ENCRYPTION_KEY, etc.) so the worker process inherits the same
+# key that login_once.py used to encrypt the saved session cookie.
+try:
+    from dotenv import load_dotenv as _load_dotenv
+    _load_dotenv(Path(__file__).parent / ".env")
+except ImportError:
+    pass  # python-dotenv not installed; env vars must be set by the caller
+
 from linkedin_mcp.audit import AuditLog, set_audit_log
 from linkedin_mcp.core.db import DEFAULT_DB_PATH
 from linkedin_mcp.worker import (
