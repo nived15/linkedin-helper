@@ -92,7 +92,7 @@ async def login():
         cookie_file = sessions_dir / 'linkedin_cookies.json'
         cookie_file.write_bytes(encrypted)
         print(f'[success] Session saved to {cookie_file}')
-        print('[done] You can now use the MCP tools without logging in again (valid 24h).')
+        print('[done] You can now use the MCP tools without logging in again (valid ~30 days).')
 
         await browser.close()
 

@@ -212,8 +212,8 @@ _ACTIONS: tuple[AdHocAction, ...] = (
         action_type="profile_search",
         legacy_tool="search_linkedin_profiles",
         required=("query",),
-        optional=("count",),
-        defaults={"count": 5},
+        optional=("count", "page"),
+        defaults={"count": 5, "page": 1},
     ),
     AdHocAction(
         name="post_search",
@@ -255,6 +255,12 @@ _ACTIONS: tuple[AdHocAction, ...] = (
         legacy_tool="interact_with_linkedin_post",
         required=("post_url",),
         approval_required=True,
+    ),
+    AdHocAction(
+        name="profile_follow",
+        action_type="profile_follow",
+        legacy_tool="follow_linkedin_profile",
+        required=("profile_url",),
     ),
 )
 

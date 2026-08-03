@@ -129,6 +129,7 @@ HARD_CEILINGS: Mapping[str, ActionCeiling] = MappingProxyType(
         "post_like": ActionCeiling(daily=60),
         "post_comment": ActionCeiling(daily=40),
         "post_share": ActionCeiling(daily=10),
+        "profile_follow": ActionCeiling(daily=80),
     }
 )
 

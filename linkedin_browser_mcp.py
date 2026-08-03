@@ -294,14 +294,26 @@ async def browse_linkedin_feed(ctx: Context, count: int = 5) -> dict:
 
 
 @mcp.tool()
-@audit_linkedin_action(ADHOC_ENQUEUE_ACTION, target="query", capture=("count",))
-async def search_linkedin_profiles(query: str, ctx: Context, count: int = 5) -> dict:
-    """Queue a People search. Poll action_status(job_id=...) for the profiles."""
+@audit_linkedin_action(ADHOC_ENQUEUE_ACTION, target="query", capture=("count", "page"))
+async def search_linkedin_profiles(query: str, ctx: Context, count: int = 5, page: int = 1) -> dict:
+    """Queue a People search. Poll action_status(job_id=...) for the profiles.
+
+    Args:
+        query: Search keyword, e.g. "Solution Engineer Microsoft UAE"
+        ctx: MCP context
+        count: Number of profiles to retrieve (default: 5)
+        page: Page number, starting at 1 (default: 1). Each page holds up to
+            10 results. Pass page=2 to get the next set of results.
+
+    Returns:
+        dict: The queued job. The result includes a `next_page` field for
+              convenience when iterating through pages.
+    """
     refusal = guard_action("profile_search")
     if refusal:
         return refusal
 
-    return queue_linkedin_action("profile_search", query=query, count=count)
+    return queue_linkedin_action("profile_search", query=query, count=count, page=page)
 
 
 @mcp.tool()
@@ -420,6 +432,35 @@ async def send_connection_request(
         note=note,
         direct=direct,
     )
+
+
+@mcp.tool()
+@audit_linkedin_action(ADHOC_ENQUEUE_ACTION, target="profile_url")
+async def follow_linkedin_profile(profile_url: str, ctx: Context) -> dict:
+    """Queue a follow action for one LinkedIn profile.
+
+    Returns a job id. Nothing has happened on LinkedIn when this returns. The
+    worker navigates to the profile, clicks Follow and reports back. Poll
+    `action_status(job_id=...)` for the result.
+
+    Args:
+        profile_url: The LinkedIn profile URL (must contain 'linkedin.com/in/')
+        ctx: MCP context for logging
+
+    Returns:
+        dict: The queued job id and action type.
+    """
+    if "linkedin.com/in/" not in profile_url:
+        return {
+            "status": "error",
+            "message": "Invalid LinkedIn profile URL. Should contain 'linkedin.com/in/'",
+        }
+
+    refusal = guard_action("profile_follow")
+    if refusal:
+        return refusal
+
+    return queue_linkedin_action("profile_follow", profile_url=profile_url)
 
 
 @mcp.tool()
