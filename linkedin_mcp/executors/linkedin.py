@@ -287,9 +287,11 @@ async def profile_search(ctx: ActionContext) -> ActionResult:
     """Search People. Was `search_linkedin_profiles`."""
     query = str(ctx.payload.get("query") or "").strip()
     count = int(ctx.payload.get("count") or 5)
+    page = max(1, int(ctx.payload.get("page") or 1))
+    start = (page - 1) * 10
 
     search_url = (
-        f"https://www.linkedin.com/search/results/people/?keywords={quote(query)}"
+        f"https://www.linkedin.com/search/results/people/?keywords={quote(query)}&start={start}"
     )
     page = await _open(ctx, search_url)
     halted = await _halted(page)
@@ -342,6 +344,8 @@ async def profile_search(ctx: ActionContext) -> ActionResult:
             "profiles": profiles,
             "count": len(profiles),
             "query": query,
+            "page": page,
+            "next_page": page + 1,
         },
         target=query,
         count=len(profiles),
@@ -905,6 +909,74 @@ _POST_SEARCH_EXTRACT_JS = """({ alreadySeen, selectors }) => {
 }"""
 
 
+async def profile_follow(ctx: ActionContext) -> ActionResult:
+    """Follow one LinkedIn profile. Mirrors the Follow button on a profile page."""
+    profile_url = str(ctx.payload.get("profile_url") or "").strip()
+
+    page = await _open(ctx)
+    try:
+        await goto_profile(
+            page, profile_url, direct=False, account_id=acting_account_id()
+        )
+    except SessionExpiredError as expired:
+        return ActionResult.failed(
+            "the LinkedIn session expired", **session_expired_result(expired)
+        )
+
+    await wait_for_selector_fallback(page, "profile_top_card", timeout=10000)
+
+    follow_button = None
+    try:
+        follow_button = await wait_for_selector_fallback(
+            page, "follow_button", timeout=5000
+        )
+    except Exception:  # noqa: BLE001 - Follow may be hidden under "More"
+        try:
+            more_button = await wait_for_selector_fallback(
+                page, "more_actions_button", timeout=3000
+            )
+            await dwell_and_click(more_button)
+            follow_button = await wait_for_selector_fallback(
+                page, "follow_button_more_menu", timeout=3000
+            )
+        except Exception:  # noqa: BLE001 - no Follow button found
+            pass
+
+    if not follow_button:
+        return ActionResult.skipped(
+            "no_follow_button",
+            profile_url=profile_url,
+            message=(
+                "Follow button not found. Profile may already be followed, or "
+                "this is a 1st-degree connection where Follow replaces Connect."
+            ),
+        )
+
+    await dwell_and_click(follow_button)
+    await pace(1.5)
+
+    profile_name = await page.evaluate(
+        """(selectors) => {
+            const el = document.querySelector(selectors.profile_name.join(', '));
+            return el ? el.innerText.trim() : 'Unknown';
+        }""",
+        selector_payload("profile_name"),
+    )
+    await _save(ctx, page)
+
+    return _finish(
+        ctx,
+        {
+            "status": "success",
+            "message": f"Now following {profile_name}",
+            "profile_url": profile_url,
+            "profile_name": profile_name,
+        },
+        target=profile_url,
+        profile_name=profile_name,
+    )
+
+
 ACTION_HANDLERS = {
     "connection_request": connection_request,
     "profile_view": profile_view,
@@ -916,6 +988,7 @@ ACTION_HANDLERS = {
     "post_like": post_interaction,
     "post_comment": post_interaction,
     "post_share": post_interaction,
+    "profile_follow": profile_follow,
 }
 """One handler per registered action name.
 

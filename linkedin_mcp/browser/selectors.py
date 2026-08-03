@@ -326,6 +326,17 @@ SELECTORS: dict[str, tuple[str, ...]] = {
         'button[aria-label="Send now"]',
         'button:has-text("Send")',
     ),
+    # --- Follow button ----------------------------------------------------
+    "follow_button": (
+        'button[aria-label*="Follow"][aria-label*="Follow"]',
+        'button:has-text("Follow")',
+        '[data-control-name="follow"]',
+    ),
+    "follow_button_more_menu": (
+        'div[role="listbox"] button:has-text("Follow")',
+        'li button:has-text("Follow")',
+        'div.artdeco-dropdown__content button:has-text("Follow")',
+    ),
     # --- Profile detail sections -----------------------------------------
     "profile_experience_item": (
         "#experience-section .pv-entity__summary-info",

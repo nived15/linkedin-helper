@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SESSIONS_DIR = REPO_ROOT / "sessions"
 ENV_PATH = REPO_ROOT / ".env"
-SESSION_COOKIE_TTL_SECONDS = 86400
+SESSION_COOKIE_TTL_SECONDS = 2_592_000  # 30 days
 
 
 @dataclass(frozen=True)

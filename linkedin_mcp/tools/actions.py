@@ -170,6 +170,14 @@ def validated_payload(name: str, fields: dict[str, Any]) -> dict[str, Any]:
             "sort_by", given.get("sort_by", action.defaults["sort_by"]), SORT_ORDERS
         )
 
+    if "page" in action.fields:
+        payload["page"] = positive_int(
+            "page",
+            given.get("page"),
+            default=int(action.defaults.get("page", 1)),
+            maximum=100,
+        )
+
     return payload
 
 
